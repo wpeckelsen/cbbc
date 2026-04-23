@@ -1,0 +1,377 @@
+Data Content
+• Product Information
+• Prices
+• Stock levels
+• Categories
+4
+• Pictures
+• Parts search / compatibility data (to be agreed on separately)
+
+Product Information
+Filename products.csv
+products_updated-yyyyMMddTHHmmss.csv
+Location /Data/Products/
+Update interval Once a day
+Product update files are preserved from past 7 days
+COLUMN NAME DESCRIPTION
+product_code Unique code / SKU of product
+Used as a unique identifier to combine
+product data between different files
+categories Categories of product as commaseparated string
+Category values/IDs are used when
+combining with data from “Categories”
+files.
+family Family of product, Set of attributes
+parent Unique code / SKU of product’s parent
+product model
+one_variant One Variant, Not configurable product
+customs_pos Customs POS, For international sales
+product_model_name-en Name of product’s parent product model in
+English
+product_model_name-fi Name of product’s parent product model in
+Finnish
+product_model_name-sv Name of product’s parent product model in
+Swedish
+vendor_name Vendor Name
+country_origin Country of Origin
+vak_code VAK Code
+yk_no YK Number
+supplier_product_code Suppliers' product code
+catalog_restriction Catalog restriction, Countries excluded
+from sales
+material Material
+make_model Make/Model
+brand Brand
+short_description-en Description of product in English
+short_description-fi Description of product in Finnish
+short_description-sv Description of product in Swedish
+long_description-en Full description of product in English
+long_description-fi Full description of product in Finnish
+long_description-sv Full description of product in Swedish
+product_name-en Name of product in English
+product_name-fi Name of product in Finnish
+product_name-sv Name of product in Swedish
+barcode Barcode, GTIN codes
+compound Compound Type
+lug_height Lug Height
+lug_height-unit Unit of Lug Height
+oem_number OEM Number
+tyre_studs Studs
+tyre_ply_rating Tyre Ply Rating
+waterproof Waterproof
+foldable Foldable
+bolt_pattern Bolt Pattern
+top_hole_diameter Top Hole Diameter
+top_hole_diameter-unit Unit of Top Hole Diameter
+top_eyelet_width Top Eyelet Width
+top_eyelet_width-unit Unit of Top Eyelet Width
+bottom_hole_diameter Bottom Hole Diameter
+bottom_hole_diameter-unit Unit of Bottom Hole Diameter
+bottom_eyelet_width Bottom Eyelet Width
+bottom_eyelet_width-unit Unit of Bottom Eyelet Width
+construction Construction
+intercom_range Intercom Range
+bulb_base Bulb Base
+resistor Resistor
+handlebar_clamp_diameter Clamp Diameter
+handlebar_clamp_diameter-unit Unit of Clamp Diameter
+front_rear_tyre Front / Rear
+mounting_kit_included Mounting Kit Included
+winch_max_capacity Winch Max Capacity
+winch_max_capacity-unit Unit of Winch Max Capacity
+tyre_weight_index Tyre Weight Index
+tyre_speed_rating Tyre Speed Rating
+power_light Power (light)
+power_light
+-unit Unit of Power (light)
+helmet_safety_system Helmet Safety System
+studs_count Studs Count
+valve_type Valve Type
+valve_length Valve Length
+valve_length
+-unit Unit of Valve Length
+bicycle_brake_type Bicycle Brake Type
+handlebar_rise Handlebar Rise
+handlebar_rise
+-unit Unit of Handlebar Rise
+buoyancy Buoyancy
+buoyancy
+-unit Unit of Buoyancy
+bicycle_brake_model Bicycle brake model
+bicycle_wheel_hub Hub
+clothing_size Clothing Size
+gender Gender
+has_membrane Has Membrane
+package_weight Package Weight
+package_weight
+-unit Unit of Package Weight
+package_height Package Height
+package_height
+-unit Unit of Package Height
+package_width Package Width
+package_width
+-unit Unit of Package Width
+package_length Package Length
+package_length
+-unit Unit of Package Length
+packing_size Packing size
+certifications Certifications
+size Size
+tyre_rim_size Tyre Rim Size
+tyre_rim_size
+-unit Unit of Tyre Rim Size
+tyre_height Tyre Height
+tyre_height
+-unit Unit of Tyre Height
+tyre_width Tyre Width
+tyre_width
+-unit Unit of Tyre Width
+max_load Max Load
+max_load
+-unit Unit of Max Load
+etrto_size ETRTO Size, for bicycle tyres
+track_length Track Length
+track_length
+-unit Unit of Track Length
+track_width Track Width
+track_width
+-unit Unit of Track Width
+track_pitch Track pitch
+track_pitch
+-unit Unit of Track pitch
+rim_width Rim Width
+rim_width
+-unit Unit of Rim Width
+cc_max CC Max
+cc_max
+-unit Unit of CC Max
+cc_min CC Min
+cc_min
+-unit Unit of CC Min
+spokes_length Spokes Length
+spokes_length
+-unit Unit of Spokes Length
+product_weight Product Weight
+product_weight
+-unit Product Weight unit
+product_height Product Height
+product_height
+-unit Unit of Product Height
+product_width Product Width
+product_width
+-unit Unit of Product Width
+product_length Product Length
+product_length
+-unit Unit of Product Length
+sparkplug_thread_length Sparkplugs Thread Length
+thickness Thickness
+thickness
+-unit Unit of Thickness
+diameter Diameter
+diameter
+-unit Unit of Diameter
+inner_diameter Inner diameter
+inner_diameter
+-unit Unit of Inner diameter
+outer_diameter Outer diameter
+outer_diameter
+-unit Unit of Outer diameter
+riser_height Risers Height
+riser_height
+-unit Unit of Risers Height
+oil_type Oil Type
+oil_viscosity Viscosity
+oil_volume Oil Volume
+oil_volume
+-unit Unit of Oil Volume
+oil_stroke Oil 2
+-stroke / 4
+-stroke
+sprocket_front Track Kits Sprocket Front
+sprocket_rear Track Kits Sprocket Rear
+drive_chain_pitch Chain & Sprocket Pitch
+chain_links Chain Links
+sprocket_internal_splines Internal Splines
+chain_guard Chain Guard
+drive_chain_lock_type Drive Chain Lock Type
+drive_chain_seal_type Drive Chain Seal Type
+drive_pitch Pitch (Drive Pitch)
+lens_colour Lens Colour (Visor)
+touch_screen_compatible Touch Screen Compatible
+sparkplug_seat_configuration Sparkplugs Seat Configuration
+silencer_fitment Silencer Fitment
+teeth_count Teeth Count
+pre_drilled Pre-Drilled
+clamp_on Clamp-On
+sunvisor Sunvisor
+sparkplug_heat_rating Sparkplugs Heat Rating
+volume Volume
+volume-unit Unit of Volume
+colour-en Colour in English
+colour-fi Colour in Finnish
+colour-sv Colour in Swedish
+colour_property-en More precise colour property/shade in
+English
+colour_property-fi More precise colour property/shade in
+Finnish
+colour_property-sv More precise colour property/shade in
+Swedish
+derailleur_gears_speed Derailleur gears (speed)
+bag_type Bag Type
+lens_type Lens Type
+battery_type Battery Type
+filter_type Filter Type
+track_type Track Type
+bulb_type Bulb Type
+transmission_type Transmission Type
+jet_type Jet Type
+suspension Suspension
+riding_style Riding Style
+adjustability_type Adjustability Type
+helmet_type Helmet Type
+lever_type Lever Type
+light_part_type Lights Part Type
+silencer_type Silencer Type
+cable_type Technical Parts Cable Type
+bearing_kit_type Bearing Kit Type
+lifejacket_type Lifejacket Type
+battery_cca Battery CCA
+battery_cca-unit Unit of Battery CCA
+battery_capacity Battery Capacity (Ah)
+battery_capacity-unit Unit of Battery Capacity (Ah)
+created Timestamp when product was created
+updated Timestamp when product was last updated
+
+Prices
+Filename Retail_pricelist.csv
+Location /
+Update interval Every other hour
+
+COLUMN NAME DESCRIPTION
+PRODUCT_ID Internal ID from ERP
+This field can be excluded from any
+automated file processing
+PRODUCT_CODE Unique code / SKU of product
+Used as a unique identifier to combine
+product data between different files.
+EUR_EXCL_VAT EUR Retail price, VAT 0%
+(Nordics/Baltics customers)
+EUR_INCL_VAT EUR Retail price including VAT
+(Nordics/Baltics customers)
+EUR_EXCL_VAT_EU EU EUR Retail price, VAT 0%
+(outside Nordics/Baltics)
+EUR_INCL_VAT_EU EU EUR Retail price including VAT
+(outside Nordics/Baltics)
+SEK_EXCL_VAT SEK Retail price, VAT 0%
+SEK_INCL_VAT SEK Retail price including VAT
+NOK_EXCL_VAT NOK Retail price, VAT 0%
+NOK_INCL_VAT NOK Retail price including VAT
+GBP_EXCL_VAT GBP Retail price, VAT 0%
+DKK_EXCL_VAT DKK Retail price, VAT 0%
+DKK_INCL_VAT DKK Retail price including VAT
+
+Stock level
+Stock levels (identified by product code)
+Filename ic_CSV.csv
+Location /
+Update interval Every 30 minutes
+
+COLUMN NAME DESCRIPTION
+PRODUCT_CODE Unique code / SKU of product
+Used as a unique identifier to combine
+product data between different files
+VAASA Stock level in Vaasa, Finland
+SWEDEN Stock level in Tranås, Sweden
+TOTAL Total stock level (Vaasa and Tranås
+combined
+
+
+Stock levels (identified by European Article Number (EAN))
+Filename ic_ean_CSV.csv
+Location /
+Update interval Every 30 minutes
+
+COLUMN NAME DESCRIPTION
+EAN European Article Number (EAN) of product
+Unique identifier for a product
+VAASA Stock level in Vaasa, Finland
+SWEDEN Stock level in Tranås, Sweden
+TOTAL Total stock level (Vaasa and Tranås
+combined
+
+
+Categories
+Filenames product_category_descriptions.csv
+product_category_hierarchy.csv
+Location /Data/
+
+Update interval Once a week
+product_category_descriptions.csv
+
+
+COLUMN NAME DESCRIPTION
+ID Unique identifier for category
+CODE Unique identifier for category
+Same value as ID field
+DESCRIPTION Description of category
+LANGUAGE_NUMBER Language code for Description
+1 = Finnish
+2 = Swedish
+3 = English
+product_category_hierarchy.csv
+COLUMN NAME DESCRIPTION
+ID Unique identifier for category
+PREV_CATEGORY ID of parent category
+CATEGORY_LEVEL Level/position of category. Position of the
+category under its parent category.
+
+Pictures
+Filename product_images.csv
+Location /Data/
+Update interval Once a day
+
+COLUMN NAME DESCRIPTION
+PRODUCT_CODE Unique code / SKU of product
+Used as a unique identifier to combine
+product data between different files
+IMAGE_URL HTTPS URL of the image
+IMAGE_NAME Filename of the image
+
+
+Parts Search
+Access to these files is subject to a separate agreement between Duell and the customer
+(data processor). Please contact your sales representative for more information.
+Parts Search
+Filename Applications_data.xlsx
+Location /Applications_Data/
+Update interval Once a month
+
+COLUMN NAME DESCRIPTION
+PRODUCT_CODE Unique code / SKU of product
+Used as a unique identifier to combine
+product data between different files
+TYP Type of vehicle
+(ATV&UTV, Motorcycle, Snowmobile...)
+BRAND Brand of vehicle
+MODEL Model of vehicle
+YEAR_MODEL_FROM First manufacturing year of model where
+fitment applies
+YEAR_MODEL_THRU Last manufacturing year of model where
+fitment applies
+EXTENDED1 Additional information about the fitment
+
+
+Tyres Search
+Filename tyres.csv
+Location /Data/
+Update interval Once a week
+COLUMN NAME DESCRIPTION
+PRODUCT_CODE Unique code / SKU of product/tyre
+Used as a unique identifier to combine
+product data between different files
+BRAND Brand of product/tyre
+CATEGORY Category of product/tyre
+WIDTH Width of tyre
+PROFILE Height/Profile of tyre
+RIM_SIZE Rim size of tyre (in inches)
+DESCRIPTION Description of product/tyre
