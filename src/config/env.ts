@@ -12,12 +12,14 @@ export const config = {
     secure: process.env.FTP_SECURE === 'true',
   },
   database: {
-    url: process.env.DATABASE_URL || (process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL.replace('https://', 'postgresql://')}?sslmode=require` : 'postgresql://user:pass@localhost:5432/cbbc_db'),
-    supabaseKey: process.env.SUPABASE_SECRET_KEY,
+    url: process.env.DATABASE_URL || '',
+    supabaseUrl: process.env.SUPABASE_API_BASE_URL || '',
+    supabaseKey: process.env.SUPABASE_SECRET_KEY || '',
   },
   ecwid: {
     storeId: process.env.ECWID_STORE_ID || '',
-    apiToken: process.env.ECWID_API_TOKEN || '',
+    apiToken: process.env.ECWID_SECRET_TOKEN || '',
+    apiBaseUrl: process.env.ECWID_API_BASE_URL || '',
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',

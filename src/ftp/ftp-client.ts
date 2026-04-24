@@ -1,6 +1,8 @@
 import { Client } from 'basic-ftp';
 import { config } from '../config/env';
 import { logger } from '../logger';
+import fs from 'fs';
+import path from 'path';
 
 export interface FtpFile {
   name: string;
@@ -81,5 +83,22 @@ export class FtpClient {
     }
     logger.error('Download failed after max retries', { remotePath, maxRetries });
     throw lastError;
+  }
+
+  async downloadWithCache(remotePath: string, localPath: string): Promise<void> {
+    // Use cached file if it exists
+    if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
+      logger.info('Using cached file', { remotePath, localPath });
+      return;
+    }
+
+    // Ensure the destination directory exists (cache dir)
+    const dir = path.dirname(localPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Download and cache
+    await this.downloadWithRetry(remotePath, localPath);
   }
 }

@@ -183,7 +183,8 @@ CREATE TABLE IF NOT EXISTS products_staging (
     battery_cca NUMERIC,
     battery_cca_unit TEXT,
     battery_capacity NUMERIC,
-    battery_capacity_unit TEXT,
+    "battery_capacity-unit" TEXT, -- Changed from battery_capacity_unit to match error message
+    category_codes TEXT[], -- Added category_codes directly
     created TIMESTAMPTZ,
     updated TIMESTAMPTZ,
     raw_hash TEXT,

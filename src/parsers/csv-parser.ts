@@ -39,7 +39,7 @@ export async function parseProductsCsv(filePath: string): Promise<ProductRecord[
   const results: ProductRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
-      .pipe(csv())
+      .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
         logger.info('Parsed products CSV', { count: results.length });
@@ -72,7 +72,7 @@ export async function parsePricesCsv(filePath: string): Promise<PriceRecord[]> {
   const results: PriceRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
-      .pipe(csv())
+      .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
         logger.info('Parsed prices CSV', { count: results.length });
@@ -98,7 +98,7 @@ export async function parseStockCsv(filePath: string, source: 'product_code' | '
   const results: StockRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
-      .pipe(csv())
+      .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
         logger.info('Parsed stock CSV', { source, count: results.length });
@@ -122,7 +122,7 @@ export async function parseCategoriesCsv(filePath: string): Promise<CategoryReco
   const results: CategoryRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
-      .pipe(csv())
+      .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
         logger.info('Parsed categories CSV', { count: results.length });
@@ -136,16 +136,16 @@ export async function parseCategoriesCsv(filePath: string): Promise<CategoryReco
 }
 
 export interface CategoryHierarchyRecord {
-  ID: string;
-  PREV_CATEGORY: string;
-  CATEGORY_LEVEL: string;
+  GROUP_ID: string;
+  PREV_GROUP: string;
+  GROUP_LEVEL: string;
 }
 
 export async function parseCategoryHierarchyCsv(filePath: string): Promise<CategoryHierarchyRecord[]> {
   const results: CategoryHierarchyRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
-      .pipe(csv())
+      .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
         logger.info('Parsed category hierarchy CSV', { count: results.length });
@@ -168,7 +168,7 @@ export async function parseImagesCsv(filePath: string): Promise<ImageRecord[]> {
   const results: ImageRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
-      .pipe(csv())
+      .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
         logger.info('Parsed images CSV', { count: results.length });

@@ -1,11 +1,12 @@
 import * as cron from 'node-cron';
 import { config } from './config/env';
 import { logger } from './logger';
+import "dotenv/config";
 import { FtpClient } from './ftp/ftp-client';
 import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, parseCategoryHierarchyCsv, parseImagesCsv } from './parsers/csv-parser';
 import { ProductValidator } from './validation/product-validator';
-import { insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging } from './db/staging';
-import { promoteToProduction } from './db/promotion';
+import { ProductFilter } from './filters/product-filter';
+import { insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction } from './api/products-api';
 import fs from 'fs';
 import path from 'path';
 
@@ -14,31 +15,32 @@ async function runPipeline(): Promise<void> {
 
   const ftpClient = new FtpClient();
   const validator = new ProductValidator();
+  const productFilter = new ProductFilter();
 
   try {
     // Step 1: Connect to FTP
     await ftpClient.connect();
 
-    // Create temp directory for downloads
-    const tempDir = path.join(__dirname, '../../temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir);
+    // Use cache directory for downloads (persists across runs)
+    const cacheDir = path.join(__dirname, '../../cache/ftp');
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
     }
 
     // Step 2: Download files
     const filesToDownload = [
-      { remote: '/Data/Products/products.csv', local: path.join(tempDir, 'products.csv') },
-      { remote: '/Retail_pricelist.csv', local: path.join(tempDir, 'prices.csv') },
-      { remote: '/ic_CSV.csv', local: path.join(tempDir, 'stock_product.csv') },
-      { remote: '/ic_ean_CSV.csv', local: path.join(tempDir, 'stock_ean.csv') },
-      { remote: '/Data/product_category_descriptions.csv', local: path.join(tempDir, 'categories.csv') },
-      { remote: '/Data/product_category_hierarchy.csv', local: path.join(tempDir, 'category_hierarchy.csv') },
-      { remote: '/Data/product_images.csv', local: path.join(tempDir, 'images.csv') },
+      { remote: '/Data/Products/products.csv', local: path.join(cacheDir, 'products.csv') },
+      { remote: '/Retail_pricelist.csv', local: path.join(cacheDir, 'prices.csv') },
+      { remote: '/ic_CSV.csv', local: path.join(cacheDir, 'stock_product.csv') },
+      { remote: '/ic_ean_CSV.csv', local: path.join(cacheDir, 'stock_ean.csv') },
+      { remote: '/Data/product_category_descriptions.csv', local: path.join(cacheDir, 'categories.csv') },
+      { remote: '/Data/product_category_hierarchy.csv', local: path.join(cacheDir, 'category_hierarchy.csv') },
+      { remote: '/Data/product_images.csv', local: path.join(cacheDir, 'images.csv') },
     ];
 
     for (const file of filesToDownload) {
       try {
-        await ftpClient.downloadWithRetry(file.remote, file.local);
+        await ftpClient.downloadWithCache(file.remote, file.local);
       } catch (error) {
         const err = error as Error;
         logger.warn(`Failed to download ${file.remote}, skipping`, { error: err.message });
@@ -46,39 +48,77 @@ async function runPipeline(): Promise<void> {
     }
 
     // Step 3: Parse files
-    const products = fs.existsSync(path.join(tempDir, 'products.csv')) ? await parseProductsCsv(path.join(tempDir, 'products.csv')) : [];
-    const prices = fs.existsSync(path.join(tempDir, 'prices.csv')) ? await parsePricesCsv(path.join(tempDir, 'prices.csv')) : [];
-    const stockProduct = fs.existsSync(path.join(tempDir, 'stock_product.csv')) ? await parseStockCsv(path.join(tempDir, 'stock_product.csv'), 'product_code') : [];
-    const stockEan = fs.existsSync(path.join(tempDir, 'stock_ean.csv')) ? await parseStockCsv(path.join(tempDir, 'stock_ean.csv'), 'ean') : [];
-    const categories = fs.existsSync(path.join(tempDir, 'categories.csv')) ? await parseCategoriesCsv(path.join(tempDir, 'categories.csv')) : [];
-    const categoryHierarchy = fs.existsSync(path.join(tempDir, 'category_hierarchy.csv')) ? await parseCategoryHierarchyCsv(path.join(tempDir, 'category_hierarchy.csv')) : [];
-    const images = fs.existsSync(path.join(tempDir, 'images.csv')) ? await parseImagesCsv(path.join(tempDir, 'images.csv')) : [];
+    const products = fs.existsSync(path.join(cacheDir, 'products.csv')) ? await parseProductsCsv(path.join(cacheDir, 'products.csv')) : [];
+    const prices = fs.existsSync(path.join(cacheDir, 'prices.csv')) ? await parsePricesCsv(path.join(cacheDir, 'prices.csv')) : [];
+    const stockProduct = fs.existsSync(path.join(cacheDir, 'stock_product.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_product.csv'), 'product_code') : [];
+    const stockEan = fs.existsSync(path.join(cacheDir, 'stock_ean.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_ean.csv'), 'ean') : [];
+    const categories = fs.existsSync(path.join(cacheDir, 'categories.csv')) ? await parseCategoriesCsv(path.join(cacheDir, 'categories.csv')) : [];
+    const categoryHierarchy = fs.existsSync(path.join(cacheDir, 'category_hierarchy.csv')) ? await parseCategoryHierarchyCsv(path.join(cacheDir, 'category_hierarchy.csv')) : [];
+    const images = fs.existsSync(path.join(cacheDir, 'images.csv')) ? await parseImagesCsv(path.join(cacheDir, 'images.csv')) : [];
 
-    // Step 4: Insert to staging
-    if (products.length > 0) await insertProductsStaging(products);
-    if (prices.length > 0) await insertPricesStaging(prices);
-    if (stockProduct.length > 0) await insertStockStaging(stockProduct, 'product_code');
-    if (stockEan.length > 0) await insertStockStaging(stockEan, 'ean');
-    if (categories.length > 0) await insertCategories(categories);
-    if (categoryHierarchy.length > 0) await insertCategoryHierarchy(categoryHierarchy);
-    if (images.length > 0) await insertImagesStaging(images);
+    logger.info(`Parsed ${products.length} products from FTP`);
 
-    // Step 5: Validate and enrich products
+    // Step 4: Build lookup maps for O(1) access (avoid O(n²) .find() loops)
+    logger.info('Building lookup maps for prices, stock, and images...');
+    const priceMap = new Map(prices.map(p => [p.PRODUCT_CODE, p]));
+    const stockMap = new Map(stockProduct.map(s => [s.PRODUCT_CODE, s]));
+    const imageMap = new Map(images.map(i => [i.PRODUCT_CODE, i]));
+    logger.info('Lookup maps built', { prices: priceMap.size, stock: stockMap.size, images: imageMap.size });
+
+    // Step 5: Validate and enrich products (in-memory, before sending to DB)
+    logger.info('Enriching products...');
     const validatedProducts = products.map(product => {
-      // Find matching price, stock, image
-      const price = prices.find(p => p.PRODUCT_CODE === product.product_code);
-      const stock = stockProduct.find(s => s.PRODUCT_CODE === product.product_code);
-      const image = images.find(i => i.PRODUCT_CODE === product.product_code);
+      const price = priceMap.get(product.product_code);
+      const stock = stockMap.get(product.product_code);
+      const image = imageMap.get(product.product_code);
       return validator.enrichProduct(product, price, stock, image ? { IMAGE_URL: image.IMAGE_URL } : undefined);
     });
+    logger.info('Enrichment complete');
 
-    // Step 6: Promote to production (limited to 10 for MVP)
-    await promoteToProduction(validatedProducts);
+    // Step 6: Apply filters to reduce dataset
+    logger.info(`Pre-filter: ${validatedProducts.length} validated products`);
+    const filterStats = productFilter.getFilterStats(validatedProducts);
+    logger.info('Filter statistics', {
+        total: filterStats.total,
+        passed: filterStats.passed,
+        failed: filterStats.failed,
+        passRate: filterStats.passRate,
+        failureReasons: filterStats.failureReasons, // Explicitly log failure reasons
+    });
+    
+    const filteredProducts = productFilter.filterProducts(validatedProducts);
+    logger.info(`Post-filter: ${filteredProducts.length} products passed filter`);
 
-    // Clean up temp files
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    // Step 7: Apply hard cap (MVP: 10 products, later: 5000)
+    const MVP_PRODUCT_LIMIT = 10;
+    const cappedProducts = filteredProducts.slice(0, MVP_PRODUCT_LIMIT);
+    logger.info(`Applied hard cap: ${cappedProducts.length} products (limit: ${MVP_PRODUCT_LIMIT})`);
 
-    logger.info('Pipeline completed successfully');
+    // Step 8: Extract product codes for filtered products
+    const cappedProductCodes = new Set(cappedProducts.map(p => p.product_code));
+
+    // Step 9: Filter related data to match only the capped products
+    const cappedPrices = prices.filter(p => cappedProductCodes.has(p.PRODUCT_CODE));
+    const cappedStockProduct = stockProduct.filter(s => cappedProductCodes.has(s.PRODUCT_CODE));
+    const cappedStockEan = stockEan.filter(s => cappedProductCodes.has(s.EAN));
+    const cappedImages = images.filter(i => cappedProductCodes.has(i.PRODUCT_CODE));
+
+    logger.info(`Filtered related data: ${cappedPrices.length} prices, ${cappedStockProduct.length} stock records, ${cappedImages.length} images`);
+
+    // Step 10: Insert ONLY filtered data to staging (not all 127k products!)
+    if (cappedProducts.length > 0) await insertProductsStaging(cappedProducts);
+    if (cappedPrices.length > 0) await insertPricesStaging(cappedPrices);
+    if (cappedStockProduct.length > 0) await insertStockStaging(cappedStockProduct, 'product_code');
+    if (cappedStockEan.length > 0) await insertStockStaging(cappedStockEan, 'ean');
+    if (categories.length > 0) await insertCategories(categories);
+    if (categoryHierarchy.length > 0) await insertCategoryHierarchy(categoryHierarchy);
+    if (cappedImages.length > 0) await insertImagesStaging(cappedImages);
+
+    // Step 11: Promote filtered products to production
+    await promoteToProduction(cappedProducts);
+
+    // Cache files are kept for subsequent runs (no cleanup)
+    logger.info('Pipeline completed successfully (cached files preserved in cache/ftp/)');
   } catch (error) {
     const err = error as Error;
     logger.error('Pipeline failed', { error: err.message, stack: err.stack });
