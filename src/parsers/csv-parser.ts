@@ -65,6 +65,7 @@ export interface PriceRecord {
   GBP_EXCL_VAT?: string;
   DKK_EXCL_VAT?: string;
   DKK_INCL_VAT?: string;
+  [key: string]: any;
 }
 
 export async function parsePricesCsv(filePath: string): Promise<PriceRecord[]> {
@@ -90,6 +91,7 @@ export interface StockRecord {
   VAASA?: string;
   SWEDEN?: string;
   TOTAL?: string;
+  [key: string]: any;
 }
 
 export async function parseStockCsv(filePath: string, source: 'product_code' | 'ean'): Promise<StockRecord[]> {

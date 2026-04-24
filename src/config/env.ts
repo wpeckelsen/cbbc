@@ -9,9 +9,11 @@ export const config = {
     port: parseInt(process.env.FTP_PORT || '21'),
     user: process.env.FTP_USER || '',
     pass: process.env.FTP_PASS || '',
+    secure: process.env.FTP_SECURE === 'true',
   },
   database: {
-    url: process.env.DATABASE_URL || 'postgresql://user:pass@localhost:5432/cbbc_db',
+    url: process.env.DATABASE_URL || (process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL.replace('https://', 'postgresql://')}?sslmode=require` : 'postgresql://user:pass@localhost:5432/cbbc_db'),
+    supabaseKey: process.env.SUPABASE_SECRET_KEY,
   },
   ecwid: {
     storeId: process.env.ECWID_STORE_ID || '',
