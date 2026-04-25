@@ -3,6 +3,16 @@ import { ValidatedProduct } from '../validation/product-validator';
 import { logger } from '../logger';
 import { logBoundarySample } from '../utils/pipeline-debug';
 
+function toNullableNumber(value: any): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const s = String(value).trim();
+  if (s === '') return null;
+  const normalized = s.replace(',', '.');
+  const n = Number.parseFloat(normalized);
+  return Number.isFinite(n) ? n : null;
+}
+
 const PRODUCTS_STAGING_COLUMNS = [
   'product_code',
   'categories',
@@ -468,6 +478,17 @@ export async function insertProductsStaging(products: any[]): Promise<void> {
   }
 }
 
+export async function clearStagingTablesForDev(): Promise<void> {
+  await supabaseClient.deleteAllByNonNullColumn('products_staging', 'product_code');
+  await supabaseClient.deleteAllByNonNullColumn('prices_staging', 'product_code');
+  await supabaseClient.deleteAllByNonNullColumn('stock_staging', 'source');
+  await supabaseClient.deleteAllByNonNullColumn('images_staging', 'product_code');
+}
+
+export async function clearProductionProductsForDev(): Promise<void> {
+  await supabaseClient.deleteAllByNonNullColumn('products', 'product_code');
+}
+
 /**
  * Insert prices into staging table (with batching for large datasets)
  */
@@ -482,17 +503,17 @@ export async function insertPricesStaging(prices: any[]): Promise<void> {
   try {
     const formattedPrices = prices.map(price => ({
       product_code: price.PRODUCT_CODE,
-      eur_excl_vat: price.EUR_EXCL_VAT,
-      eur_incl_vat: price.EUR_INCL_VAT,
-      eur_excl_vat_eu: price.EUR_EXCL_VAT_EU,
-      eur_incl_vat_eu: price.EUR_INCL_VAT_EU,
-      sek_excl_vat: price.SEK_EXCL_VAT,
-      sek_incl_vat: price.SEK_INCL_VAT,
-      nok_excl_vat: price.NOK_EXCL_VAT,
-      nok_incl_vat: price.NOK_INCL_VAT,
-      gbp_excl_vat: price.GBP_EXCL_VAT,
-      dkk_excl_vat: price.DKK_EXCL_VAT,
-      dkk_incl_vat: price.DKK_INCL_VAT,
+      eur_excl_vat: toNullableNumber(price.EUR_EXCL_VAT),
+      eur_incl_vat: toNullableNumber(price.EUR_INCL_VAT),
+      eur_excl_vat_eu: toNullableNumber(price.EUR_EXCL_VAT_EU),
+      eur_incl_vat_eu: toNullableNumber(price.EUR_INCL_VAT_EU),
+      sek_excl_vat: toNullableNumber(price.SEK_EXCL_VAT),
+      sek_incl_vat: toNullableNumber(price.SEK_INCL_VAT),
+      nok_excl_vat: toNullableNumber(price.NOK_EXCL_VAT),
+      nok_incl_vat: toNullableNumber(price.NOK_INCL_VAT),
+      gbp_excl_vat: toNullableNumber(price.GBP_EXCL_VAT),
+      dkk_excl_vat: toNullableNumber(price.DKK_EXCL_VAT),
+      dkk_incl_vat: toNullableNumber(price.DKK_INCL_VAT),
       imported_at: new Date().toISOString(),
     }));
 
@@ -699,9 +720,41 @@ export async function promoteToProduction(validatedProducts: ValidatedProduct[])
   const BATCH_SIZE = 1000;
   
   try {
-    const productsToPromote = validatedProducts.map(product => {
-      const status = product.errors.length === 0 ? 'valid' : 'invalid';
-      
+    const rejected = validatedProducts.filter((p) => p.errors.length > 0);
+    const accepted = validatedProducts.filter((p) => p.errors.length === 0);
+
+    if (rejected.length > 0) {
+      const byField: Record<string, number> = {};
+      for (const p of rejected) {
+        for (const e of p.errors) {
+          byField[e.field] = (byField[e.field] || 0) + 1;
+        }
+      }
+      const topFields = Object.entries(byField)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .reduce((acc, [k, v]) => {
+          acc[k] = v;
+          return acc;
+        }, {} as Record<string, number>);
+
+      logger.warn(
+        {
+          rejected: rejected.length,
+          accepted: accepted.length,
+          topErrorFields: topFields,
+        },
+        'Rejected products due to validation errors (not promoted to production)'
+      );
+    }
+
+    if (accepted.length === 0) {
+      logger.info('No valid products to promote to production');
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const productsToPromote = accepted.map(product => {
       return {
         product_code: product.product_code,
         name_en: product.name_en,
@@ -718,8 +771,8 @@ export async function promoteToProduction(validatedProducts: ValidatedProduct[])
         vendor_name: product.vendor_name,
         catalog_restriction: product.catalog_restriction,
         image_url: product.image_url,
-        imported_at: new Date().toISOString(),
-        status: status,
+        imported_at: nowIso,
+        last_synced_at: nowIso,
       };
     });
 

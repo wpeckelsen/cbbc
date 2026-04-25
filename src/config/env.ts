@@ -3,6 +3,14 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
+function parseBooleanEnv(value: string | undefined, defaultValue: boolean = false): boolean {
+  if (value === undefined) return defaultValue;
+  const v = value.trim().toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'n' || v === 'off') return false;
+  return defaultValue;
+}
+
 export const config = {
   ftp: {
     host: process.env.FTP_HOST || 'ftp.example.com',
@@ -33,4 +41,7 @@ export const config = {
     schedule: process.env.CRON_SCHEDULE || '0 2 * * *',
   },
   nodeEnv: process.env.NODE_ENV || 'development',
+  dev: {
+    cleanSlate: parseBooleanEnv(process.env.DEV_CLEAN_SLATE, false),
+  },
 };

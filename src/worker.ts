@@ -6,17 +6,39 @@ import { FtpClient } from './ftp/ftp-client';
 import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, parseCategoryHierarchyCsv, parseImagesCsv } from './parsers/csv-parser';
 import { ProductValidator } from './validation/product-validator';
 import { ProductFilter } from './filters/product-filter';
-import { insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction } from './api/products-api';
+import { insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev } from './api/products-api';
 import { logBoundarySample } from './utils/pipeline-debug';
 import fs from 'fs';
 import path from 'path';
+
+function normalizeHyphenKeysInPlace(record: Record<string, any>): void {
+  for (const k of Object.keys(record)) {
+    if (!k.includes('-')) continue;
+    const normalizedKey = k.replace(/-/g, '_');
+    if (!(normalizedKey in record)) {
+      record[normalizedKey] = record[k];
+    }
+    delete record[k];
+  }
+}
 
 async function runPipeline(): Promise<void> {
   logger.info('Starting FTP product pipeline');
 
   const ftpClient = new FtpClient();
   const validator = new ProductValidator();
-  const productFilter = new ProductFilter();
+  const productFilter = new ProductFilter({
+    requiresPrice: true,
+    requiresStock: true,
+    customLogic: (p: any) => {
+      const stockTotal = p.stock_total || 0;
+      const hasImage = typeof p.image_url === 'string' && p.image_url.trim() !== '';
+      const hasCategories = Array.isArray(p.category_codes) && p.category_codes.length > 0;
+      const hasBrand = typeof p.brand === 'string' && p.brand.trim() !== '';
+      const hasNoValidationErrors = Array.isArray(p.errors) && p.errors.length === 0;
+      return stockTotal > 1 && hasImage && hasCategories && hasBrand && hasNoValidationErrors;
+    },
+  });
 
   try {
     // Step 1: Connect to FTP
@@ -50,6 +72,7 @@ async function runPipeline(): Promise<void> {
 
     // Step 3: Parse files
     const products = fs.existsSync(path.join(cacheDir, 'products.csv')) ? await parseProductsCsv(path.join(cacheDir, 'products.csv')) : [];
+    for (const p of products) normalizeHyphenKeysInPlace(p);
     const prices = fs.existsSync(path.join(cacheDir, 'prices.csv')) ? await parsePricesCsv(path.join(cacheDir, 'prices.csv')) : [];
     const stockProduct = fs.existsSync(path.join(cacheDir, 'stock_product.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_product.csv'), 'product_code') : [];
     const stockEan = fs.existsSync(path.join(cacheDir, 'stock_ean.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_ean.csv'), 'ean') : [];
@@ -117,6 +140,9 @@ async function runPipeline(): Promise<void> {
     logger.info(`Filtered related data: ${cappedPrices.length} prices, ${cappedStockProduct.length} stock records, ${cappedImages.length} images`);
 
     // Step 10: Insert ONLY filtered data to staging (not all 127k products!)
+    if (config.dev.cleanSlate) {
+      await clearStagingTablesForDev();
+    }
     if (cappedProducts.length > 0) await insertProductsStaging(cappedProducts);
     if (cappedPrices.length > 0) await insertPricesStaging(cappedPrices);
     if (cappedStockProduct.length > 0) await insertStockStaging(cappedStockProduct, 'product_code');
@@ -127,6 +153,11 @@ async function runPipeline(): Promise<void> {
 
     // Step 11: Promote filtered products to production
     await promoteToProduction(cappedProducts);
+
+    if (config.dev.cleanSlate) {
+      await clearProductionProductsForDev();
+      await clearStagingTablesForDev();
+    }
 
     // Pre-Ecwid boundary placeholder (Ecwid sync not implemented yet)
     logBoundarySample('pre-ecwid:products', cappedProducts as any, { maxStringLen: 80 });

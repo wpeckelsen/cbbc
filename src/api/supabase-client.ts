@@ -198,6 +198,15 @@ export class SupabaseClient {
   }
 
   /**
+   * Delete all rows from a table by using a non-null filter on a known column.
+   * This avoids assuming the presence of an `id` column.
+   */
+  async deleteAllByNonNullColumn(table: string, nonNullColumn: string): Promise<void> {
+    logger.warn(`Deleting all rows from table: ${table} (where ${nonNullColumn} is not null)`);
+    await this.request(table, 'DELETE', undefined, { [nonNullColumn]: 'not.is.null' });
+  }
+
+  /**
    * Execute a stored procedure/RPC
    */
   async rpc<T>(functionName: string, params?: any): Promise<T> {
@@ -209,8 +218,9 @@ export class SupabaseClient {
    */
   async truncate(table: string): Promise<void> {
     logger.warn(`Truncating table: ${table}`);
-    // Supabase doesn't have a direct truncate, so we delete all with a wildcard
-    await this.request(table, 'DELETE', undefined, { 'id': 'not.is.null' });
+    // Supabase doesn't have a direct truncate, so we delete all with a wildcard.
+    // This assumes the table has an `id` column. Prefer deleteAllByNonNullColumn for other tables.
+    await this.deleteAllByNonNullColumn(table, 'id');
   }
 }
 
