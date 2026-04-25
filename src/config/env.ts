@@ -12,7 +12,12 @@ export const config = {
     secure: process.env.FTP_SECURE === 'true',
   },
   database: {
-    url: process.env.DATABASE_URL || '',
+    url:
+      process.env.DATABASE_URL ||
+      process.env.SUPABASE_DB_URL ||
+      process.env.SUPABASE_DATABASE_URL ||
+      process.env.SUPABASE_POSTGRES_URL ||
+      '',
     supabaseUrl: process.env.SUPABASE_API_BASE_URL || '',
     supabaseKey: process.env.SUPABASE_SECRET_KEY || '',
   },

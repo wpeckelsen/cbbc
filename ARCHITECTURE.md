@@ -13,7 +13,7 @@ This service fetches product data from an FTP server, validates and filters it, 
 
 ### Current Architecture (v2.0)
 - **Supabase REST API** instead of direct database connection
-- **Product filtering** during ingestion (~5000 products)
+- **Product filtering** during ingestion (~5000 products) but cap at 10 for mvp
 - **Scalable** and ready for Ecwid sync
 
 ## System Components
@@ -218,7 +218,7 @@ All requests include:
 - Pipeline aborts on critical errors
 - Logs preserved for debugging
 - Safe to restart - idempotent operations
-
+ /§   
 ## Monitoring & Logging
 
 ### Log Levels
