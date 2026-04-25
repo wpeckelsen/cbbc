@@ -1,6 +1,205 @@
 import { supabaseClient } from './supabase-client';
 import { ValidatedProduct } from '../validation/product-validator';
 import { logger } from '../logger';
+import { logBoundarySample } from '../utils/pipeline-debug';
+
+const PRODUCTS_STAGING_COLUMNS = [
+  'product_code',
+  'categories',
+  'family',
+  'parent',
+  'one_variant',
+  'customs_pos',
+  'product_model_name_en',
+  'product_model_name_fi',
+  'product_model_name_sv',
+  'vendor_name',
+  'country_origin',
+  'vak_code',
+  'yk_no',
+  'supplier_product_code',
+  'catalog_restriction',
+  'material',
+  'make_model',
+  'brand',
+  'short_description_en',
+  'short_description_fi',
+  'short_description_sv',
+  'long_description_en',
+  'long_description_fi',
+  'long_description_sv',
+  'product_name_en',
+  'product_name_fi',
+  'product_name_sv',
+  'barcode',
+  'compound',
+  'lug_height',
+  'lug_height_unit',
+  'oem_number',
+  'tyre_studs',
+  'tyre_ply_rating',
+  'waterproof',
+  'foldable',
+  'bolt_pattern',
+  'top_hole_diameter',
+  'top_hole_diameter_unit',
+  'top_eyelet_width',
+  'top_eyelet_width_unit',
+  'bottom_hole_diameter',
+  'bottom_hole_diameter_unit',
+  'bottom_eyelet_width',
+  'bottom_eyelet_width_unit',
+  'construction',
+  'intercom_range',
+  'bulb_base',
+  'resistor',
+  'handlebar_clamp_diameter',
+  'handlebar_clamp_diameter_unit',
+  'front_rear_tyre',
+  'mounting_kit_included',
+  'winch_max_capacity',
+  'winch_max_capacity_unit',
+  'tyre_weight_index',
+  'tyre_speed_rating',
+  'power_light',
+  'power_light_unit',
+  'helmet_safety_system',
+  'studs_count',
+  'valve_type',
+  'valve_length',
+  'valve_length_unit',
+  'bicycle_brake_type',
+  'handlebar_rise',
+  'handlebar_rise_unit',
+  'buoyancy',
+  'buoyancy_unit',
+  'bicycle_brake_model',
+  'bicycle_wheel_hub',
+  'clothing_size',
+  'gender',
+  'has_membrane',
+  'package_weight',
+  'package_weight_unit',
+  'package_height',
+  'package_height_unit',
+  'package_width',
+  'package_width_unit',
+  'package_length',
+  'package_length_unit',
+  'packing_size',
+  'certifications',
+  'size',
+  'tyre_rim_size',
+  'tyre_rim_size_unit',
+  'tyre_height',
+  'tyre_height_unit',
+  'tyre_width',
+  'tyre_width_unit',
+  'max_load',
+  'max_load_unit',
+  'etrto_size',
+  'track_length',
+  'track_length_unit',
+  'track_width',
+  'track_width_unit',
+  'track_pitch',
+  'track_pitch_unit',
+  'rim_width',
+  'rim_width_unit',
+  'cc_max',
+  'cc_max_unit',
+  'cc_min',
+  'cc_min_unit',
+  'spokes_length',
+  'spokes_length_unit',
+  'product_weight',
+  'product_weight_unit',
+  'product_height',
+  'product_height_unit',
+  'product_width',
+  'product_width_unit',
+  'product_length',
+  'product_length_unit',
+  'sparkplug_thread_length',
+  'thickness',
+  'thickness_unit',
+  'diameter',
+  'diameter_unit',
+  'inner_diameter',
+  'inner_diameter_unit',
+  'outer_diameter',
+  'outer_diameter_unit',
+  'riser_height',
+  'riser_height_unit',
+  'oil_type',
+  'oil_viscosity',
+  'oil_volume',
+  'oil_volume_unit',
+  'oil_stroke',
+  'sprocket_front',
+  'sprocket_rear',
+  'drive_chain_pitch',
+  'chain_links',
+  'sprocket_internal_splines',
+  'chain_guard',
+  'drive_chain_lock_type',
+  'drive_chain_seal_type',
+  'drive_pitch',
+  'lens_colour',
+  'touch_screen_compatible',
+  'sparkplug_seat_configuration',
+  'silencer_fitment',
+  'teeth_count',
+  'pre_drilled',
+  'clamp_on',
+  'sunvisor',
+  'sparkplug_heat_rating',
+  'volume',
+  'volume_unit',
+  'colour_en',
+  'colour_fi',
+  'colour_sv',
+  'colour_property_en',
+  'colour_property_fi',
+  'colour_property_sv',
+  'derailleur_gears_speed',
+  'bag_type',
+  'lens_type',
+  'battery_type',
+  'filter_type',
+  'track_type',
+  'bulb_type',
+  'transmission_type',
+  'jet_type',
+  'suspension',
+  'riding_style',
+  'adjustability_type',
+  'helmet_type',
+  'lever_type',
+  'light_part_type',
+  'silencer_type',
+  'cable_type',
+  'bearing_kit_type',
+  'lifejacket_type',
+  'battery_cca',
+  'battery_cca_unit',
+  'battery_capacity',
+  'battery_capacity-unit',
+  'category_codes',
+  'created',
+  'updated',
+  'raw_hash',
+  'imported_at',
+  'image_url',
+] as const;
+
+type ProductsStagingColumn = (typeof PRODUCTS_STAGING_COLUMNS)[number];
+
+export type ProductsStagingRow =
+  & { product_code: string; imported_at: string }
+  & Partial<Record<Exclude<ProductsStagingColumn, 'product_code' | 'imported_at'>, any>>;
+
+const PRODUCTS_STAGING_COLUMN_SET = new Set<string>(PRODUCTS_STAGING_COLUMNS);
 
 // Helper function to transform keys from FTP format to DB format
 function transformProductKeys(product: Record<string, any>): Record<string, any> {
@@ -216,6 +415,21 @@ function transformProductKeys(product: Record<string, any>): Record<string, any>
     return transformedProduct;
 }
 
+function toProductsStagingRow(product: Record<string, any>): ProductsStagingRow {
+  const transformed = transformProductKeys(product);
+  const filtered: Record<string, any> = {};
+
+  for (const [k, v] of Object.entries(transformed)) {
+    const key = k.replace(/^"|"$/g, '');
+    if (PRODUCTS_STAGING_COLUMN_SET.has(key)) {
+      filtered[key] = v;
+    }
+  }
+
+  filtered['imported_at'] = new Date().toISOString();
+  return filtered as ProductsStagingRow;
+}
+
 /**
  * Insert products into staging table (with batching for large datasets)
  */
@@ -236,10 +450,13 @@ export async function insertProductsStaging(products: any[]): Promise<void> {
       const end = Math.min(start + BATCH_SIZE, products.length);
       const batch = products.slice(start, end);
       
-      // Transform the batch to map FTP column names to DB column names
-      const transformedBatch = batch.map(transformProductKeys);
+      const transformedBatch = batch.map((p) => toProductsStagingRow(p));
+
+      logBoundarySample('pre-staging:products_staging', transformedBatch as any);
       
-      await supabaseClient.upsert('products_staging', transformedBatch, 'product_code');
+      await supabaseClient.upsert('products_staging', transformedBatch, 'product_code', {
+        boundary: 'pipeline.pre-staging.products_staging',
+      });
       logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} products)`);
     }
     
@@ -287,7 +504,10 @@ export async function insertPricesStaging(prices: any[]): Promise<void> {
       const end = Math.min(start + BATCH_SIZE, formattedPrices.length);
       const batch = formattedPrices.slice(start, end);
       
-      await supabaseClient.upsert('prices_staging', batch, 'product_code');
+      logBoundarySample('pre-staging:prices_staging', batch as any);
+      await supabaseClient.upsert('prices_staging', batch, 'product_code', {
+        boundary: 'pipeline.pre-staging.prices_staging',
+      });
       logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} prices)`);
     }
     
@@ -311,12 +531,21 @@ export async function insertStockStaging(stock: any[], source: string): Promise<
   const BATCH_SIZE = 1000;
   
   try {
+    const toInt = (value: any): number => {
+      if (value === null || value === undefined || value === '') return 0;
+      if (typeof value === 'number') return Number.isFinite(value) ? Math.trunc(value) : 0;
+      const s = String(value).trim();
+      const head = s.split(/[,.]/, 1)[0];
+      const n = Number.parseInt(head, 10);
+      return Number.isFinite(n) ? n : 0;
+    };
+
     const formattedStock = stock.map(item => ({
       product_code: item.PRODUCT_CODE || null,
       ean: item.EAN || null,
-      vaasa: item.VAASA || 0,
-      sweden: item.SWEDEN || 0,
-      total: item.TOTAL || 0,
+      vaasa: toInt(item.VAASA),
+      sweden: toInt(item.SWEDEN),
+      total: toInt(item.TOTAL),
       source: source,
       imported_at: new Date().toISOString(),
     }));
@@ -329,7 +558,10 @@ export async function insertStockStaging(stock: any[], source: string): Promise<
       const end = Math.min(start + BATCH_SIZE, formattedStock.length);
       const batch = formattedStock.slice(start, end);
       
-      await supabaseClient.insert('stock_staging', batch);
+      logBoundarySample(`pre-staging:stock_staging:${source}`, batch as any);
+      await supabaseClient.insert('stock_staging', batch, {
+        boundary: `pipeline.pre-staging.stock_staging:${source}`,
+      });
       logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} stock records)`);
     }
     
@@ -372,7 +604,10 @@ export async function insertCategories(categories: any[]): Promise<void> {
     });
 
     logger.info(`Deduplicated categories: ${categories.length} -> ${deduped.length} (prefer English, lang 2)`);
-    await supabaseClient.upsert('categories', deduped, 'id');
+    logBoundarySample('pre-staging:categories', deduped as any);
+    await supabaseClient.upsert('categories', deduped, 'id', {
+      boundary: 'pipeline.pre-staging.categories',
+    });
     logger.info(`Inserted ${deduped.length} categories`);
   } catch (error) {
     const err = error as Error;
@@ -398,7 +633,10 @@ export async function insertCategoryHierarchy(hierarchy: any[]): Promise<void> {
       category_level: parseInt(h.GROUP_LEVEL) || 0
     }));
     
-    await supabaseClient.upsert('category_hierarchy', formattedHierarchy, 'id');
+    logBoundarySample('pre-staging:category_hierarchy', formattedHierarchy as any);
+    await supabaseClient.upsert('category_hierarchy', formattedHierarchy, 'id', {
+      boundary: 'pipeline.pre-staging.category_hierarchy',
+    });
     logger.info(`Inserted ${formattedHierarchy.length} category hierarchy records`);
   } catch (error) {
     const err = error as Error;
@@ -434,7 +672,10 @@ export async function insertImagesStaging(images: any[]): Promise<void> {
       const end = Math.min(start + BATCH_SIZE, formattedImages.length);
       const batch = formattedImages.slice(start, end);
       
-      await supabaseClient.insert('images_staging', batch);
+      logBoundarySample('pre-staging:images_staging', batch as any);
+      await supabaseClient.insert('images_staging', batch, {
+        boundary: 'pipeline.pre-staging.images_staging',
+      });
       logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} images)`);
     }
     
@@ -482,6 +723,8 @@ export async function promoteToProduction(validatedProducts: ValidatedProduct[])
       };
     });
 
+    logBoundarySample('pre-prod:products', productsToPromote as any);
+
     const batches = Math.ceil(productsToPromote.length / BATCH_SIZE);
     logger.info(`Promoting ${productsToPromote.length} products to production in ${batches} batches`);
     
@@ -490,7 +733,9 @@ export async function promoteToProduction(validatedProducts: ValidatedProduct[])
       const end = Math.min(start + BATCH_SIZE, productsToPromote.length);
       const batch = productsToPromote.slice(start, end);
       
-      await supabaseClient.upsert('products', batch, 'product_code');
+      await supabaseClient.upsert('products', batch, 'product_code', {
+        boundary: 'pipeline.pre-prod.products',
+      });
       logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} products)`);
     }
     
@@ -541,8 +786,8 @@ export async function updateProductSyncStatus(
 }
 
 /**
- * Log Ecwid sync result
- */
+* Log Ecwid sync result
+*/
 export async function logEcwidSync(
   productCode: string,
   ecwidItemId: string | null,
@@ -554,11 +799,13 @@ export async function logEcwidSync(
       product_code: productCode,
       ecwid_item_id: ecwidItemId,
       synced_at: new Date().toISOString(),
-      status: status,
+      status,
       message: message || null,
     };
 
-    await supabaseClient.insert('ecwid_sync_logs', [logEntry]);
+    await supabaseClient.insert('ecwid_sync_logs', [logEntry], {
+      boundary: 'pipeline.ecwid.ecwid_sync_logs',
+    });
   } catch (error) {
     const err = error as Error;
     logger.error('Failed to log Ecwid sync', { 

@@ -1,5 +1,6 @@
 import { config } from '../config/env';
 import { logger } from '../logger';
+import { preflightDropUnknownColumns } from '../db/schema-preflight';
 
 export class SupabaseClient {
   private baseUrl: string;
@@ -99,17 +100,33 @@ export class SupabaseClient {
   /**
    * Insert records into a table
    */
-  async insert<T>(table: string, records: any[]): Promise<T[]> {
+  async insert<T>(
+    table: string,
+    records: any[],
+    opts?: {
+      boundary?: string;
+    }
+  ): Promise<T[]> {
     if (records.length === 0) return [];
+
+    const boundary = opts?.boundary ?? `supabase.insert:${table}`;
+    const preflight = await preflightDropUnknownColumns(table, records, boundary);
     
-    logger.info(`Inserting ${records.length} records into ${table}`);
-    return this.request<T[]>(table, 'POST', records);
+    logger.info(`Inserting ${preflight.records.length} records into ${table}`);
+    return this.request<T[]>(table, 'POST', preflight.records);
   }
 
   /**
    * Upsert records (insert or update on conflict)
    */
-  async upsert<T>(table: string, records: any[], onConflict?: string): Promise<T[]> {
+  async upsert<T>(
+    table: string,
+    records: any[],
+    onConflict?: string,
+    opts?: {
+      boundary?: string;
+    }
+  ): Promise<T[]> {
     if (records.length === 0) return [];
     
     const params: Record<string, string> = {};
@@ -117,8 +134,11 @@ export class SupabaseClient {
       params['on_conflict'] = onConflict;
     }
 
-    logger.info(`Upserting ${records.length} records into ${table}`);
-    return this.request<T[]>(table, 'POST', records, params);
+    const boundary = opts?.boundary ?? `supabase.upsert:${table}`;
+    const preflight = await preflightDropUnknownColumns(table, records, boundary);
+
+    logger.info(`Upserting ${preflight.records.length} records into ${table}`);
+    return this.request<T[]>(table, 'POST', preflight.records, params);
   }
 
   /**

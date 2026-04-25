@@ -7,6 +7,7 @@ import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, pa
 import { ProductValidator } from './validation/product-validator';
 import { ProductFilter } from './filters/product-filter';
 import { insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction } from './api/products-api';
+import { logBoundarySample } from './utils/pipeline-debug';
 import fs from 'fs';
 import path from 'path';
 
@@ -56,6 +57,14 @@ async function runPipeline(): Promise<void> {
     const categoryHierarchy = fs.existsSync(path.join(cacheDir, 'category_hierarchy.csv')) ? await parseCategoryHierarchyCsv(path.join(cacheDir, 'category_hierarchy.csv')) : [];
     const images = fs.existsSync(path.join(cacheDir, 'images.csv')) ? await parseImagesCsv(path.join(cacheDir, 'images.csv')) : [];
 
+    logBoundarySample('post-parse:products', products as any);
+    logBoundarySample('post-parse:prices', prices as any);
+    logBoundarySample('post-parse:stock_product', stockProduct as any);
+    logBoundarySample('post-parse:stock_ean', stockEan as any);
+    logBoundarySample('post-parse:categories', categories as any);
+    logBoundarySample('post-parse:category_hierarchy', categoryHierarchy as any);
+    logBoundarySample('post-parse:images', images as any);
+
     logger.info(`Parsed ${products.length} products from FTP`);
 
     // Step 4: Build lookup maps for O(1) access (avoid O(n²) .find() loops)
@@ -74,6 +83,8 @@ async function runPipeline(): Promise<void> {
       return validator.enrichProduct(product, price, stock, image ? { IMAGE_URL: image.IMAGE_URL } : undefined);
     });
     logger.info('Enrichment complete');
+
+    logBoundarySample('post-validate:validated_products', validatedProducts as any);
 
     // Step 6: Apply filters to reduce dataset
     logger.info(`Pre-filter: ${validatedProducts.length} validated products`);
@@ -116,6 +127,9 @@ async function runPipeline(): Promise<void> {
 
     // Step 11: Promote filtered products to production
     await promoteToProduction(cappedProducts);
+
+    // Pre-Ecwid boundary placeholder (Ecwid sync not implemented yet)
+    logBoundarySample('pre-ecwid:products', cappedProducts as any, { maxStringLen: 80 });
 
     // Cache files are kept for subsequent runs (no cleanup)
     logger.info('Pipeline completed successfully (cached files preserved in cache/ftp/)');
