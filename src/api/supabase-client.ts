@@ -148,7 +148,11 @@ export class SupabaseClient {
     table: string,
     columns: string = '*',
     filters?: Record<string, any>,
-    limit?: number
+    limit?: number,
+    orderBy?: {
+      column: string;
+      ascending?: boolean;
+    }
   ): Promise<T[]> {
     const params: Record<string, string> = {
       select: columns,
@@ -162,6 +166,10 @@ export class SupabaseClient {
 
     if (limit) {
       params['limit'] = limit.toString();
+    }
+
+    if (orderBy) {
+      params['order'] = `${orderBy.column}.${orderBy.ascending === false ? 'desc' : 'asc'}`;
     }
 
     return this.request<T[]>(table, 'GET', undefined, params);

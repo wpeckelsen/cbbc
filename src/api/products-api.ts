@@ -816,6 +816,27 @@ export async function getProductsFromProduction(limit?: number): Promise<any[]> 
 }
 
 /**
+ * Get newest products from production table (deterministic ordering)
+ */
+export async function getNewestProductsFromProduction(limit: number): Promise<any[]> {
+  try {
+    const products = await supabaseClient.select(
+      'products',
+      '*',
+      undefined,
+      limit,
+      { column: 'imported_at', ascending: false }
+    );
+    logger.info(`Retrieved ${products.length} newest products from production`, { limit });
+    return products;
+  } catch (error) {
+    const err = error as Error;
+    logger.error('Failed to get newest products from production', { error: err.message });
+    throw error;
+  }
+}
+
+/**
  * Update product sync status
  */
 export async function updateProductSyncStatus(

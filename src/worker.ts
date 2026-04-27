@@ -6,8 +6,9 @@ import { FtpClient } from './ftp/ftp-client';
 import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, parseCategoryHierarchyCsv, parseImagesCsv } from './parsers/csv-parser';
 import { ProductValidator } from './validation/product-validator';
 import { ProductFilter } from './filters/product-filter';
-import { insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev } from './api/products-api';
+import { insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev, getNewestProductsFromProduction, logEcwidSync, updateProductSyncStatus } from './api/products-api';
 import { logBoundarySample } from './utils/pipeline-debug';
+import { ecwidClient } from './ecwid/ecwid-client';
 import fs from 'fs';
 import path from 'path';
 
@@ -123,8 +124,18 @@ async function runPipeline(): Promise<void> {
     const filteredProducts = productFilter.filterProducts(validatedProducts);
     logger.info(`Post-filter: ${filteredProducts.length} products passed filter`);
 
+    const eligibleForPromotionPreCap = filteredProducts.filter(p => (p.errors?.length ?? 0) === 0).length;
+    logger.info(
+      {
+        passedFilter: filteredProducts.length,
+        eligibleForPromotion: eligibleForPromotionPreCap,
+        ineligibleForPromotion: filteredProducts.length - eligibleForPromotionPreCap,
+      },
+      'Promotion eligibility (pre-cap)'
+    );
+
     // Step 7: Apply hard cap (MVP: 10 products, later: 5000)
-    const MVP_PRODUCT_LIMIT = 10;
+    const MVP_PRODUCT_LIMIT = 50;
     const cappedProducts = filteredProducts.slice(0, MVP_PRODUCT_LIMIT);
     logger.info(`Applied hard cap: ${cappedProducts.length} products (limit: ${MVP_PRODUCT_LIMIT})`);
 
@@ -153,6 +164,28 @@ async function runPipeline(): Promise<void> {
 
     // Step 11: Promote filtered products to production
     await promoteToProduction(cappedProducts);
+
+    // Step 12: Sync newest production products to Ecwid (MVP: 10)
+    try {
+      const newest = await getNewestProductsFromProduction(10);
+      const batchItems = newest.map((p: any) => ({
+        productCode: p.product_code,
+        name: p.name_en,
+        price: p.price_eur_incl_vat,
+        sku: p.product_code,
+      }));
+
+      const results = await ecwidClient.batchCreateProducts(batchItems);
+      for (const r of results) {
+        if (r.status === 'success') {
+          await updateProductSyncStatus(r.productCode, new Date());
+        }
+        await logEcwidSync(r.productCode, r.ecwidItemId ?? null, r.status, r.message);
+      }
+    } catch (error) {
+      const err = error as Error;
+      logger.error('Ecwid sync step failed (continuing pipeline)', { error: err.message });
+    }
 
     if (config.dev.cleanSlate) {
       await clearProductionProductsForDev();

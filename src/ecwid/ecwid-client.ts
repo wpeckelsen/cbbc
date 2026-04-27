@@ -18,6 +18,86 @@ export class EcwidClient {
     this.baseUrl = config.ecwid.apiBaseUrl;
   }
 
+  private get normalizedBaseUrl(): string {
+    return this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
+  }
+
+  private get authHeader(): string {
+    return `Bearer ${this.apiToken}`;
+  }
+
+  private assertConfigured(): void {
+    if (!this.apiToken) throw new Error('Missing ECWID_SECRET_TOKEN');
+    if (!this.baseUrl) throw new Error('Missing ECWID_API_BASE_URL');
+  }
+
+  private async request<T>(path: string, opts: { method: string; body?: any }): Promise<T> {
+    this.assertConfigured();
+
+    const url = `${this.normalizedBaseUrl}${path}`;
+    const res = await fetch(url, {
+      method: opts.method,
+      headers: {
+        Authorization: this.authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`Ecwid API error: ${res.status} ${res.statusText} - ${text}`);
+    }
+
+    if (!text) return {} as T;
+    return JSON.parse(text) as T;
+  }
+
+  async batchCreateProducts(products: Array<{ productCode: string; name: string; price: number; sku: string }>): Promise<Array<{ productCode: string; status: 'success' | 'failed'; ecwidItemId?: string; message?: string }>> {
+    if (products.length === 0) return [];
+
+    const payload = {
+      requests: products.map((p) => ({
+        path: '/products',
+        method: 'POST',
+        body: {
+          name: p.name,
+          price: p.price,
+          sku: p.sku,
+        },
+      })),
+    };
+
+    const response = await this.request<any>('/batch?allowParallelMode=true', { method: 'POST', body: payload });
+
+    const responses: any[] = Array.isArray(response)
+      ? response
+      : Array.isArray(response?.responses)
+        ? response.responses
+        : Array.isArray(response?.results)
+          ? response.results
+          : [];
+
+    if (responses.length === 0) {
+      logger.warn('Unexpected Ecwid batch response shape', { response });
+    }
+
+    return products.map((p, idx) => {
+      const r = responses[idx];
+      const statusCode = r?.statusCode ?? r?.status ?? r?.code;
+      const ok = typeof statusCode === 'number' ? statusCode >= 200 && statusCode < 300 : false;
+      const body = r?.body ?? r?.result ?? r;
+      const ecwidId = body?.id ?? body?.productId ?? body?.product_id;
+
+      if (ok) {
+        return { productCode: p.productCode, status: 'success', ecwidItemId: ecwidId !== undefined ? String(ecwidId) : undefined };
+      }
+
+      const message = r?.errorMessage ?? r?.message ?? (typeof body === 'string' ? body : JSON.stringify(body ?? r));
+      return { productCode: p.productCode, status: 'failed', message };
+    });
+  }
+
   /**
    * Sync a product to Ecwid
    * @param product - Product data to sync
