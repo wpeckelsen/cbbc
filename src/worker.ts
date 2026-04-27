@@ -56,7 +56,6 @@ async function runPipeline(): Promise<void> {
       { remote: '/Data/Products/products.csv', local: path.join(cacheDir, 'products.csv') },
       { remote: '/Retail_pricelist.csv', local: path.join(cacheDir, 'prices.csv') },
       { remote: '/ic_CSV.csv', local: path.join(cacheDir, 'stock_product.csv') },
-      { remote: '/ic_ean_CSV.csv', local: path.join(cacheDir, 'stock_ean.csv') },
       { remote: '/Data/product_category_descriptions.csv', local: path.join(cacheDir, 'categories.csv') },
       { remote: '/Data/product_category_hierarchy.csv', local: path.join(cacheDir, 'category_hierarchy.csv') },
       { remote: '/Data/product_images.csv', local: path.join(cacheDir, 'images.csv') },
@@ -76,7 +75,6 @@ async function runPipeline(): Promise<void> {
     for (const p of products) normalizeHyphenKeysInPlace(p);
     const prices = fs.existsSync(path.join(cacheDir, 'prices.csv')) ? await parsePricesCsv(path.join(cacheDir, 'prices.csv')) : [];
     const stockProduct = fs.existsSync(path.join(cacheDir, 'stock_product.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_product.csv'), 'product_code') : [];
-    const stockEan = fs.existsSync(path.join(cacheDir, 'stock_ean.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_ean.csv'), 'ean') : [];
     const categories = fs.existsSync(path.join(cacheDir, 'categories.csv')) ? await parseCategoriesCsv(path.join(cacheDir, 'categories.csv')) : [];
     const categoryHierarchy = fs.existsSync(path.join(cacheDir, 'category_hierarchy.csv')) ? await parseCategoryHierarchyCsv(path.join(cacheDir, 'category_hierarchy.csv')) : [];
     const images = fs.existsSync(path.join(cacheDir, 'images.csv')) ? await parseImagesCsv(path.join(cacheDir, 'images.csv')) : [];
@@ -84,7 +82,6 @@ async function runPipeline(): Promise<void> {
     logBoundarySample('post-parse:products', products as any);
     logBoundarySample('post-parse:prices', prices as any);
     logBoundarySample('post-parse:stock_product', stockProduct as any);
-    logBoundarySample('post-parse:stock_ean', stockEan as any);
     logBoundarySample('post-parse:categories', categories as any);
     logBoundarySample('post-parse:category_hierarchy', categoryHierarchy as any);
     logBoundarySample('post-parse:images', images as any);
@@ -145,7 +142,6 @@ async function runPipeline(): Promise<void> {
     // Step 9: Filter related data to match only the capped products
     const cappedPrices = prices.filter(p => cappedProductCodes.has(p.PRODUCT_CODE));
     const cappedStockProduct = stockProduct.filter(s => cappedProductCodes.has(s.PRODUCT_CODE));
-    const cappedStockEan = stockEan.filter(s => cappedProductCodes.has(s.EAN));
     const cappedImages = images.filter(i => cappedProductCodes.has(i.PRODUCT_CODE));
 
     logger.info(`Filtered related data: ${cappedPrices.length} prices, ${cappedStockProduct.length} stock records, ${cappedImages.length} images`);
@@ -157,7 +153,6 @@ async function runPipeline(): Promise<void> {
     if (cappedProducts.length > 0) await insertProductsStaging(cappedProducts);
     if (cappedPrices.length > 0) await insertPricesStaging(cappedPrices);
     if (cappedStockProduct.length > 0) await insertStockStaging(cappedStockProduct, 'product_code');
-    if (cappedStockEan.length > 0) await insertStockStaging(cappedStockEan, 'ean');
     if (categories.length > 0) await insertCategories(categories);
     if (categoryHierarchy.length > 0) await insertCategoryHierarchy(categoryHierarchy);
     if (cappedImages.length > 0) await insertImagesStaging(cappedImages);

@@ -201,7 +201,7 @@ export class ProductValidator {
     if (!stock) {
       errors.push({ field: 'stock_total', value: null, reason: 'stock_total is required' });
     } else {
-      const stockValidation = this.validateStock(stock, stock.PRODUCT_CODE ? 'product_code' : 'ean');
+      const stockValidation = this.validateStock(stock, 'product_code');
       if (stockValidation.isValid) {
         if (stock.VAASA !== undefined && stock.VAASA !== null && String(stock.VAASA).trim() !== '') {
           validated.stock_vaasa = parseInt(String(stock.VAASA), 10);
