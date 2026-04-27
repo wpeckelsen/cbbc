@@ -13,12 +13,68 @@ function toNullableNumber(value: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function normalizeCategoryCodes(value: any): string[] {
+  if (!Array.isArray(value)) return [];
+  const out = value
+    .map((v) => (v === null || v === undefined ? '' : String(v).trim()))
+    .filter((v) => v !== '');
+  out.sort((a, b) => a.localeCompare(b));
+  return Array.from(new Set(out));
+}
+
+function deriveModelCode(p: ValidatedProduct): string {
+  const raw = typeof p.model_code === 'string' && p.model_code.trim() !== '' ? p.model_code.trim() : undefined;
+  return raw ?? p.product_code;
+}
+
+type ProductModelRow = {
+  model_code: string;
+  name_en: string;
+  name_fi: string | null;
+  name_sv: string | null;
+  brand: string;
+  vendor_name: string;
+  category_codes: string[];
+  catalog_restriction: string | null;
+  imported_at: string;
+  last_synced_at?: string | null;
+};
+
+type ProductVariantRow = {
+  product_code: string;
+  model_code: string;
+  barcode: string;
+  price_eur_excl_vat: number;
+  price_eur_incl_vat: number;
+  stock_total: number;
+  stock_vaasa: number | null;
+  stock_sweden: number | null;
+  image_url: string;
+  imported_at: string;
+  last_synced_at?: string | null;
+};
+
+type ModelMetadata = Partial<
+  Pick<
+    ValidatedProduct,
+    | 'product_model_name_en'
+    | 'product_model_name_fi'
+    | 'product_model_name_sv'
+    | 'name_en'
+    | 'name_fi'
+    | 'name_sv'
+    | 'brand'
+    | 'vendor_name'
+    | 'category_codes'
+    | 'catalog_restriction'
+  >
+>;
+
 const PRODUCTS_STAGING_COLUMNS = [
   'product_code',
   'categories',
   'family',
   'parent',
-  'one_variant',
   'customs_pos',
   'product_model_name_en',
   'product_model_name_fi',
@@ -211,6 +267,15 @@ export type ProductsStagingRow =
 
 const PRODUCTS_STAGING_COLUMN_SET = new Set<string>(PRODUCTS_STAGING_COLUMNS);
 
+function sanitizeStagingValue(value: any): any {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed === '' ? null : trimmed;
+  }
+  return String(value).trim();
+}
+
 // Helper function to transform keys from FTP format to DB format
 function transformProductKeys(product: Record<string, any>): Record<string, any> {
     const mapping: Record<string, string> = {
@@ -394,9 +459,18 @@ function transformProductKeys(product: Record<string, any>): Record<string, any>
             }
 
             // Special handling for categories -> category_codes
-            if (key === 'categories' && product[key]) {
-                transformedProduct['category_codes'] = product[key].split(',').map((cat: string) => cat.trim()).filter((cat: string) => cat !== '');
-            } else if (key === 'created' || key === 'updated') {
+            if (dbKey === 'categories') {
+                const raw = sanitizeStagingValue(product[key]);
+                if (typeof raw === 'string' && raw !== '') {
+                  transformedProduct['categories'] = raw;
+                  transformedProduct['category_codes'] = raw
+                    .split(',')
+                    .map((cat: string) => cat.trim())
+                    .filter((cat: string) => cat !== '');
+                } else {
+                  transformedProduct['categories'] = null;
+                }
+            } else if (dbKey === 'created' || dbKey === 'updated') {
                 // Ensure date fields are in ISO format if they exist and are valid
                 if (product[key]) {
                     try {
@@ -414,7 +488,7 @@ function transformProductKeys(product: Record<string, any>): Record<string, any>
                 }
             }
             else {
-                transformedProduct[dbKey] = product[key];
+                transformedProduct[dbKey] = sanitizeStagingValue(product[key]);
             }
         }
     }
@@ -486,7 +560,8 @@ export async function clearStagingTablesForDev(): Promise<void> {
 }
 
 export async function clearProductionProductsForDev(): Promise<void> {
-  await supabaseClient.deleteAllByNonNullColumn('products', 'product_code');
+  await supabaseClient.deleteAllByNonNullColumn('product_variants', 'product_code');
+  await supabaseClient.deleteAllByNonNullColumn('product_models', 'model_code');
 }
 
 /**
@@ -711,14 +786,19 @@ export async function insertImagesStaging(images: any[]): Promise<void> {
 /**
  * Promote validated products to production table (with batching for large datasets)
  */
-export async function promoteToProduction(validatedProducts: ValidatedProduct[]): Promise<void> {
+export async function promoteToProduction(
+  validatedProducts: ValidatedProduct[],
+  opts?: {
+    modelMetadataByCode?: Map<string, ModelMetadata>;
+  }
+): Promise<void> {
   if (validatedProducts.length === 0) {
     logger.info('No products to promote to production');
     return;
   }
 
   const BATCH_SIZE = 1000;
-  
+
   try {
     const rejected = validatedProducts.filter((p) => p.errors.length > 0);
     const accepted = validatedProducts.filter((p) => p.errors.length === 0);
@@ -744,58 +824,161 @@ export async function promoteToProduction(validatedProducts: ValidatedProduct[])
           accepted: accepted.length,
           topErrorFields: topFields,
         },
-        'Rejected products due to validation errors (not promoted to production)'
+        'Rejected variants due to validation errors (not promoted to production)'
       );
     }
 
     if (accepted.length === 0) {
-      logger.info('No valid products to promote to production');
+      logger.info('No valid variants to promote to production');
       return;
     }
 
     const nowIso = new Date().toISOString();
-    const productsToPromote = accepted.map(product => {
-      return {
-        product_code: product.product_code,
-        name_en: product.name_en,
-        name_fi: product.name_fi,
-        name_sv: product.name_sv,
-        brand: product.brand,
-        category_codes: product.category_codes,
-        price_eur_excl_vat: product.price_eur_excl_vat,
-        price_eur_incl_vat: product.price_eur_incl_vat,
-        stock_total: product.stock_total,
-        stock_vaasa: product.stock_vaasa,
-        stock_sweden: product.stock_sweden,
-        barcode: product.barcode,
-        vendor_name: product.vendor_name,
-        catalog_restriction: product.catalog_restriction,
-        image_url: product.image_url,
+
+    const variantsToPromote: ProductVariantRow[] = [];
+    const modelRepresentative = new Map<string, ValidatedProduct>();
+
+    for (const v of accepted) {
+      const modelCode = deriveModelCode(v);
+      if (!modelRepresentative.has(modelCode)) modelRepresentative.set(modelCode, v);
+
+      const priceExcl = v.price_eur_excl_vat;
+      const priceIncl = v.price_eur_incl_vat;
+      const stockTotal = v.stock_total;
+
+      if (
+        typeof v.barcode !== 'string' ||
+        typeof v.image_url !== 'string' ||
+        typeof priceExcl !== 'number' ||
+        typeof priceIncl !== 'number' ||
+        typeof stockTotal !== 'number'
+      ) {
+        continue;
+      }
+
+      variantsToPromote.push({
+        product_code: v.product_code,
+        model_code: modelCode,
+        barcode: v.barcode,
+        price_eur_excl_vat: priceExcl,
+        price_eur_incl_vat: priceIncl,
+        stock_total: stockTotal,
+        stock_vaasa: typeof v.stock_vaasa === 'number' ? v.stock_vaasa : null,
+        stock_sweden: typeof v.stock_sweden === 'number' ? v.stock_sweden : null,
+        image_url: v.image_url,
         imported_at: nowIso,
-        last_synced_at: nowIso,
-      };
-    });
-
-    logBoundarySample('pre-prod:products', productsToPromote as any);
-
-    const batches = Math.ceil(productsToPromote.length / BATCH_SIZE);
-    logger.info(`Promoting ${productsToPromote.length} products to production in ${batches} batches`);
-    
-    for (let i = 0; i < batches; i++) {
-      const start = i * BATCH_SIZE;
-      const end = Math.min(start + BATCH_SIZE, productsToPromote.length);
-      const batch = productsToPromote.slice(start, end);
-      
-      await supabaseClient.upsert('products', batch, 'product_code', {
-        boundary: 'pipeline.pre-prod.products',
       });
-      logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} products)`);
     }
-    
-    logger.info(`Successfully promoted ${productsToPromote.length} products to production`);
+
+    if (variantsToPromote.length === 0) {
+      logger.info('No variants with required fields to promote to production');
+      return;
+    }
+
+    const modelsToPromote: ProductModelRow[] = [];
+    for (const [modelCode, rep] of modelRepresentative) {
+      const meta = opts?.modelMetadataByCode?.get(modelCode);
+
+      const brandRaw = typeof meta?.brand === 'string' && meta.brand.trim() !== ''
+        ? meta.brand
+        : (typeof rep.brand === 'string' ? rep.brand : '');
+      const vendorRaw = typeof meta?.vendor_name === 'string' && meta.vendor_name.trim() !== ''
+        ? meta.vendor_name
+        : (typeof rep.vendor_name === 'string' ? rep.vendor_name : '');
+
+      const categoryCodes = Array.isArray(meta?.category_codes) && meta.category_codes.length > 0
+        ? normalizeCategoryCodes(meta.category_codes)
+        : normalizeCategoryCodes(rep.category_codes);
+
+      const nameEn =
+        (typeof meta?.product_model_name_en === 'string' && meta.product_model_name_en.trim() !== ''
+          ? meta.product_model_name_en
+          : undefined) ??
+        (typeof meta?.name_en === 'string' && meta.name_en.trim() !== '' ? meta.name_en : undefined) ??
+        (typeof rep.product_model_name_en === 'string' && rep.product_model_name_en.trim() !== ''
+          ? rep.product_model_name_en
+          : undefined) ??
+        (rep.name_en ?? '');
+
+      const nameFi =
+        (typeof meta?.product_model_name_fi === 'string' && meta.product_model_name_fi.trim() !== ''
+          ? meta.product_model_name_fi
+          : undefined) ??
+        (typeof meta?.name_fi === 'string' && meta.name_fi.trim() !== '' ? meta.name_fi : undefined) ??
+        (typeof rep.product_model_name_fi === 'string' && rep.product_model_name_fi.trim() !== ''
+          ? rep.product_model_name_fi
+          : undefined) ??
+        (rep.name_fi ?? null);
+
+      const nameSv =
+        (typeof meta?.product_model_name_sv === 'string' && meta.product_model_name_sv.trim() !== ''
+          ? meta.product_model_name_sv
+          : undefined) ??
+        (typeof meta?.name_sv === 'string' && meta.name_sv.trim() !== '' ? meta.name_sv : undefined) ??
+        (typeof rep.product_model_name_sv === 'string' && rep.product_model_name_sv.trim() !== ''
+          ? rep.product_model_name_sv
+          : undefined) ??
+        (rep.name_sv ?? null);
+
+      if (nameEn === '' || brandRaw === '' || vendorRaw === '' || categoryCodes.length === 0) {
+        continue;
+      }
+
+      modelsToPromote.push({
+        model_code: modelCode,
+        name_en: nameEn,
+        name_fi: nameFi,
+        name_sv: nameSv,
+        brand: brandRaw,
+        vendor_name: vendorRaw,
+        category_codes: categoryCodes,
+        catalog_restriction: (meta?.catalog_restriction ?? rep.catalog_restriction) ?? null,
+        imported_at: nowIso,
+      });
+    }
+
+    const promotedModelCodes = new Set(modelsToPromote.map((m) => m.model_code));
+    const filteredVariantsToPromote = variantsToPromote.filter((v) => promotedModelCodes.has(v.model_code));
+
+    if (filteredVariantsToPromote.length === 0) {
+      logger.info('No variants left to promote after filtering by promotable models');
+      return;
+    }
+
+    logBoundarySample('pre-prod:product_models', modelsToPromote as any);
+    logBoundarySample('pre-prod:product_variants', filteredVariantsToPromote as any);
+
+    const modelBatches = Math.ceil(modelsToPromote.length / BATCH_SIZE);
+    logger.info(`Promoting ${modelsToPromote.length} product models to production in ${modelBatches} batches`);
+    for (let i = 0; i < modelBatches; i++) {
+      const start = i * BATCH_SIZE;
+      const end = Math.min(start + BATCH_SIZE, modelsToPromote.length);
+      const batch = modelsToPromote.slice(start, end);
+      await supabaseClient.upsert('product_models', batch, 'model_code', {
+        boundary: 'pipeline.pre-prod.product_models',
+      });
+      logger.info(`Batch ${i + 1}/${modelBatches} complete (${batch.length} product models)`);
+    }
+
+    const variantBatches = Math.ceil(filteredVariantsToPromote.length / BATCH_SIZE);
+    logger.info(`Promoting ${filteredVariantsToPromote.length} product variants to production in ${variantBatches} batches`);
+    for (let i = 0; i < variantBatches; i++) {
+      const start = i * BATCH_SIZE;
+      const end = Math.min(start + BATCH_SIZE, filteredVariantsToPromote.length);
+      const batch = filteredVariantsToPromote.slice(start, end);
+      await supabaseClient.upsert('product_variants', batch, 'product_code', {
+        boundary: 'pipeline.pre-prod.product_variants',
+      });
+      logger.info(`Batch ${i + 1}/${variantBatches} complete (${batch.length} product variants)`);
+    }
+
+    logger.info('Successfully promoted models + variants to production', {
+      models: modelsToPromote.length,
+      variants: filteredVariantsToPromote.length,
+    });
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to promote products to production', { error: err.message });
+    logger.error('Failed to promote models + variants to production', { error: err.message });
     throw error;
   }
 }

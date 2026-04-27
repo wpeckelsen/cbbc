@@ -9,6 +9,11 @@ export interface ValidationError {
 
 export interface ValidatedProduct {
   product_code: string;
+  parent?: string;
+  model_code?: string;
+  product_model_name_en?: string;
+  product_model_name_fi?: string;
+  product_model_name_sv?: string;
   name_en?: string;
   name_fi?: string;
   name_sv?: string;
@@ -171,8 +176,16 @@ export class ProductValidator {
   ): ValidatedProduct {
     const { errors } = this.validateProduct(product);
 
+    const parent = typeof product.parent === 'string' && product.parent.trim() !== '' ? product.parent.trim() : undefined;
+    const model_code = parent ?? product.product_code;
+
     const validated: ValidatedProduct = {
       product_code: product.product_code,
+      parent,
+      model_code,
+      product_model_name_en: product.product_model_name_en,
+      product_model_name_fi: product.product_model_name_fi,
+      product_model_name_sv: product.product_model_name_sv,
       name_en: product.product_name_en,
       name_fi: product.product_name_fi,
       name_sv: product.product_name_sv,
