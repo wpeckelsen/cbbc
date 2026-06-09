@@ -57,6 +57,7 @@ const SKIP_KEYS = new Set(['time', 'level', 'msg', 'pid', 'hostname', 'runId', '
 
 class FileLogStream extends Writable {
   private ws: fs.WriteStream;
+  private ended = false;
 
   constructor(filePath: string) {
     super();
@@ -68,6 +69,7 @@ class FileLogStream extends Writable {
     _encoding: string,
     cb: (error?: Error | null) => void,
   ): void {
+    if (this.ended) { cb(); return; }
     try {
       const raw = chunk.toString().trim();
       if (!raw) {
@@ -83,10 +85,12 @@ class FileLogStream extends Writable {
 
   /** Write raw text (headers / footers) bypassing JSON parsing. */
   writeRaw(text: string): void {
+    if (this.ended) return;
     this.ws.write(text);
   }
 
   close(): Promise<void> {
+    this.ended = true;
     return new Promise((resolve) => this.ws.end(resolve));
   }
 
