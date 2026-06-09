@@ -43,6 +43,7 @@ type ProductModelRow = {
 type ProductVariantRow = {
   product_code: string;
   model_code: string;
+  name_en: string;
   barcode: string;
   price_eur_excl_vat: number;
   price_eur_incl_vat: number;
@@ -846,9 +847,12 @@ export async function promoteToProduction(
       const priceIncl = v.price_eur_incl_vat;
       const stockTotal = v.stock_total;
 
+      const variantNameEn = typeof v.name_en === 'string' ? v.name_en.trim() : '';
+
       if (
         typeof v.barcode !== 'string' ||
         typeof v.image_url !== 'string' ||
+        variantNameEn === '' ||
         typeof priceExcl !== 'number' ||
         typeof priceIncl !== 'number' ||
         typeof stockTotal !== 'number'
@@ -859,6 +863,7 @@ export async function promoteToProduction(
       variantsToPromote.push({
         product_code: v.product_code,
         model_code: modelCode,
+        name_en: variantNameEn,
         barcode: v.barcode,
         price_eur_excl_vat: priceExcl,
         price_eur_incl_vat: priceIncl,
@@ -983,92 +988,247 @@ export async function promoteToProduction(
   }
 }
 
-/**
- * Get products from production table
- */
-export async function getProductsFromProduction(limit?: number): Promise<any[]> {
-  try {
-    const products = await supabaseClient.select('products', '*', undefined, limit);
-    logger.info(`Retrieved ${products.length} products from production`);
-    return products;
-  } catch (error) {
-    const err = error as Error;
-    logger.error('Failed to get products from production', { error: err.message });
-    throw error;
-  }
-}
+// ---------------------------------------------------------------------------
+// Store sync (store-agnostic) reads + bookkeeping
+//
+// These power the storefront push (currently Shopify). They are deliberately
+// store-agnostic so a future storefront swap only touches the storefront client,
+// not the pipeline/DB layer.
+// ---------------------------------------------------------------------------
+
+export type ProductionModel = {
+  model_code: string;
+  name_en: string;
+  name_fi: string | null;
+  name_sv: string | null;
+  brand: string;
+  vendor_name: string;
+  category_codes: string[];
+  catalog_restriction: string | null;
+  imported_at: string;
+  last_synced_at: string | null;
+};
+
+export type ProductionVariant = {
+  product_code: string;
+  model_code: string;
+  name_en: string;
+  barcode: string;
+  price_eur_excl_vat: number;
+  price_eur_incl_vat: number;
+  stock_total: number;
+  stock_vaasa: number | null;
+  stock_sweden: number | null;
+  image_url: string;
+  imported_at: string;
+  last_synced_at: string | null;
+};
+
+export type ModelWithVariants = {
+  model: ProductionModel;
+  variants: ProductionVariant[];
+};
+
+export type StoreProductLink = {
+  model_code: string;
+  external_product_id: string;
+  external_handle: string | null;
+  last_synced_at: string | null;
+};
+
+const STORE_PAGE_SIZE = 1000;
 
 /**
- * Get newest products from production table (deterministic ordering)
+ * Read every row of a production table using offset pagination so the push
+ * scales to the full feed (~120k variants) without loading partial pages.
  */
-export async function getNewestProductsFromProduction(limit: number): Promise<any[]> {
-  try {
-    const products = await supabaseClient.select(
-      'products',
+async function selectAllPaged<T>(
+  table: string,
+  orderColumn: string
+): Promise<T[]> {
+  const all: T[] = [];
+  let offset = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const page = await supabaseClient.select<T>(
+      table,
       '*',
       undefined,
-      limit,
-      { column: 'imported_at', ascending: false }
+      STORE_PAGE_SIZE,
+      { column: orderColumn, ascending: true },
+      offset
     );
-    logger.info(`Retrieved ${products.length} newest products from production`, { limit });
-    return products;
+    all.push(...page);
+    if (page.length < STORE_PAGE_SIZE) break;
+    offset += STORE_PAGE_SIZE;
+  }
+  return all;
+}
+
+/**
+ * Load the full promoted catalogue (production models joined with their variants),
+ * grouped by model. Models with zero variants are skipped (Shopify products need
+ * at least one variant).
+ */
+export async function getPromotedModelsWithVariants(): Promise<ModelWithVariants[]> {
+  const [models, variants] = await Promise.all([
+    selectAllPaged<ProductionModel>('product_models', 'model_code'),
+    selectAllPaged<ProductionVariant>('product_variants', 'product_code'),
+  ]);
+
+  const variantsByModel = new Map<string, ProductionVariant[]>();
+  for (const v of variants) {
+    const list = variantsByModel.get(v.model_code) ?? [];
+    list.push(v);
+    variantsByModel.set(v.model_code, list);
+  }
+
+  const out: ModelWithVariants[] = [];
+  for (const model of models) {
+    const modelVariants = variantsByModel.get(model.model_code) ?? [];
+    if (modelVariants.length === 0) continue;
+    out.push({ model, variants: modelVariants });
+  }
+
+  logger.info('Loaded promoted catalogue for store sync', {
+    models: out.length,
+    variants: variants.length,
+  });
+  return out;
+}
+
+/**
+ * Read all known external-store product links (model_code -> external product id).
+ * Used to reconcile deletions: any link not present in the current promoted set
+ * is removed from the storefront.
+ */
+export async function getAllStoreProductLinks(): Promise<StoreProductLink[]> {
+  return selectAllPaged<StoreProductLink>('store_product_links', 'model_code');
+}
+
+/**
+ * Upsert the mapping between a local model and its external storefront product.
+ */
+export async function upsertStoreProductLink(link: {
+  model_code: string;
+  external_product_id: string;
+  external_handle?: string | null;
+}): Promise<void> {
+  try {
+    await supabaseClient.upsert(
+      'store_product_links',
+      [
+        {
+          model_code: link.model_code,
+          external_product_id: link.external_product_id,
+          external_handle: link.external_handle ?? null,
+          last_synced_at: new Date().toISOString(),
+        },
+      ],
+      'model_code',
+      { boundary: 'pipeline.store.store_product_links' }
+    );
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to get newest products from production', { error: err.message });
+    logger.error('Failed to upsert store product link', { error: err.message, modelCode: link.model_code });
     throw error;
   }
 }
 
 /**
- * Update product sync status
+ * Upsert a variant link (product_code -> external variant + inventory item ids).
  */
-export async function updateProductSyncStatus(
-  productCode: string,
-  lastSyncedAt: Date
-): Promise<void> {
+export async function upsertStoreVariantLink(link: {
+  product_code: string;
+  model_code: string;
+  external_variant_id: string;
+  external_inventory_item_id?: string | null;
+}): Promise<void> {
+  try {
+    await supabaseClient.upsert(
+      'store_variant_links',
+      [
+        {
+          product_code: link.product_code,
+          model_code: link.model_code,
+          external_variant_id: link.external_variant_id,
+          external_inventory_item_id: link.external_inventory_item_id ?? null,
+          last_synced_at: new Date().toISOString(),
+        },
+      ],
+      'product_code',
+      { boundary: 'pipeline.store.store_variant_links' }
+    );
+  } catch (error) {
+    const err = error as Error;
+    logger.error('Failed to upsert store variant link', { error: err.message, productCode: link.product_code });
+    throw error;
+  }
+}
+
+/**
+ * Remove a model's links (product + its variants) after the product has been
+ * deleted from the storefront.
+ */
+export async function deleteStoreProductLink(modelCode: string): Promise<void> {
+  try {
+    await supabaseClient.delete('store_variant_links', { model_code: modelCode });
+    await supabaseClient.delete('store_product_links', { model_code: modelCode });
+  } catch (error) {
+    const err = error as Error;
+    logger.error('Failed to delete store product link', { error: err.message, modelCode });
+    throw error;
+  }
+}
+
+/**
+ * Stamp last_synced_at on a promoted model after a successful push.
+ */
+export async function updateModelSyncStatus(modelCode: string, lastSyncedAt: Date): Promise<void> {
   try {
     await supabaseClient.update(
-      'products',
+      'product_models',
       { last_synced_at: lastSyncedAt.toISOString() },
-      { product_code: productCode }
+      { model_code: modelCode }
     );
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to update product sync status', { 
-      error: err.message, 
-      productCode 
-    });
-    throw error;
+    logger.error('Failed to update model sync status', { error: err.message, modelCode });
+    // Non-fatal: bookkeeping only.
   }
 }
 
 /**
-* Log Ecwid sync result
-*/
-export async function logEcwidSync(
-  productCode: string,
-  ecwidItemId: string | null,
-  status: 'success' | 'failed',
-  message?: string
-): Promise<void> {
+ * Log a store sync result (store-agnostic). Never throws — logging failures must
+ * not break the sync.
+ */
+export async function logStoreSync(entry: {
+  scope: 'product' | 'variant';
+  local_code: string;
+  external_id?: string | null;
+  action: 'create' | 'update' | 'delete';
+  status: 'success' | 'failed';
+  message?: string;
+}): Promise<void> {
   try {
-    const logEntry = {
-      product_code: productCode,
-      ecwid_item_id: ecwidItemId,
-      synced_at: new Date().toISOString(),
-      status,
-      message: message || null,
-    };
-
-    await supabaseClient.insert('ecwid_sync_logs', [logEntry], {
-      boundary: 'pipeline.ecwid.ecwid_sync_logs',
-    });
+    await supabaseClient.insert(
+      'store_sync_logs',
+      [
+        {
+          scope: entry.scope,
+          local_code: entry.local_code,
+          external_id: entry.external_id ?? null,
+          action: entry.action,
+          status: entry.status,
+          message: entry.message ?? null,
+          synced_at: new Date().toISOString(),
+        },
+      ],
+      { boundary: 'pipeline.store.store_sync_logs' }
+    );
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to log Ecwid sync', { 
-      error: err.message, 
-      productCode 
-    });
-    // Don't throw - logging failures shouldn't break the sync
+    logger.error('Failed to log store sync', { error: err.message, localCode: entry.local_code });
+    // Don't throw.
   }
 }

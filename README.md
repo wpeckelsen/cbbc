@@ -8,7 +8,7 @@ This project is an automated pipeline that:
 - Cleans and checks the data for completeness
 - Selects a limited set of products to publish (to keep the system manageable)
 - Stores the selected products in a database (Supabase)
-- Prepares the data for syncing to an online store (Ecwid)
+- Pushes the selected products to an online store (Shopify)
 
 ## Why it exists
 
@@ -59,9 +59,40 @@ To keep the output small during the current phase, the pipeline enforces a hard 
 
 The worker is designed to run on a schedule (cron). The exact timing is configurable and depends on the deployment.
 
-## Store sync (Ecwid)
+## Store sync (Shopify)
 
-This repository contains the beginnings of an Ecwid sync. At the moment, the core pipeline focuses on building a clean set of models + variants in Supabase.
+After the pipeline builds a clean set of models + variants in Supabase, a separate
+step pushes them to a Shopify storefront via the GraphQL Admin API:
+
+- Each **product model** becomes a Shopify **product**; its **variants** are grouped
+  underneath it.
+- Re-runs **upsert** (create or update) keyed by a deterministic product handle
+  (`cbbc-{model_code}`), so prices, stock, and images stay in sync without creating
+  duplicates.
+- Inventory is written to a single Shopify location.
+- Models that are no longer in the promoted set are **deleted** from Shopify.
+
+Run it manually:
+
+```bash
+npm run shopify:push:prod
+```
+
+A weekly schedule can be enabled by setting `SHOPIFY_PUSH_CRON` (e.g. `0 3 * * 1`
+for Monday 03:00); it is disabled by default.
+
+### Pricing / VAT note
+
+Variant prices are pushed **excluding VAT** (`price_eur_excl_vat`). For totals to be
+correct, configure your Shopify store so that prices **do not** include tax
+("Settings → Taxes and duties") and let Shopify add VAT at checkout.
+
+### Required configuration
+
+See `.env.example`. The Shopify push needs `SHOPIFY_STORE_DOMAIN`,
+`SHOPIFY_ADMIN_ACCESS_TOKEN`, and `SHOPIFY_API_VERSION` (optionally
+`SHOPIFY_LOCATION_ID` and `SHOPIFY_PUSH_CRON`). Create a Shopify custom app with
+`read_products`, `write_products`, `read_inventory`, and `write_inventory` scopes.
 
 ## Where to learn more (technical)
 
