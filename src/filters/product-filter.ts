@@ -1,4 +1,5 @@
-import { logger } from '../logger';
+import { Logger } from 'pino';
+import { logger as defaultLogger } from '../logger';
 
 export interface FilterCriteria {
   requiresStock?: boolean;           // Only products with stock > 0
@@ -26,21 +27,22 @@ export const DEFAULT_FILTER_CRITERIA: FilterCriteria = {
 
 export class ProductFilter {
   private criteria: FilterCriteria;
+  private log: Logger;
 
-  constructor(criteria: FilterCriteria = DEFAULT_FILTER_CRITERIA) {
+  constructor(criteria: FilterCriteria = DEFAULT_FILTER_CRITERIA, log: Logger = defaultLogger) {
     this.criteria = { ...DEFAULT_FILTER_CRITERIA, ...criteria };
-    logger.info('ProductFilter initialized', { criteria: this.criteria });
+    this.log = log;
   }
 
   /**
    * Filter a list of products based on criteria
    */
   filterProducts(products: any[]): any[] {
-    logger.info(`Filtering ${products.length} products`);
+    this.log.debug(`Filtering ${products.length} products`);
     
     const filtered = products.filter(product => this.shouldIncludeProduct(product));
     
-    logger.info(`Filtered to ${filtered.length} products (${((filtered.length / products.length) * 100).toFixed(1)}% retained)`);
+    this.log.debug(`Filtered to ${filtered.length} products (${((filtered.length / products.length) * 100).toFixed(1)}% retained)`);
     
     return filtered;
   }
@@ -131,7 +133,7 @@ export class ProductFilter {
    */
   updateCriteria(newCriteria: Partial<FilterCriteria>): void {
     this.criteria = { ...this.criteria, ...newCriteria };
-    logger.info('Filter criteria updated', { criteria: this.criteria });
+    this.log.debug('Filter criteria updated');
   }
 
   /**

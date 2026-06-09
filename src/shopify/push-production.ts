@@ -1,7 +1,9 @@
 import * as cron from 'node-cron';
+import { Logger } from 'pino';
 import { config } from '../config/env';
 import { logger } from '../logger';
 import {
+  configureProductsApi,
   getPromotedModelsWithVariants,
   getAllStoreProductLinks,
   upsertStoreProductLink,
@@ -11,8 +13,11 @@ import {
   logStoreSync,
   ModelWithVariants,
 } from '../api/products-api';
-import { shopifyClient, InventoryQuantity } from './shopify-client';
+import { ShopifyClient, shopifyClient as defaultShopifyClient, InventoryQuantity } from './shopify-client';
+import { SupabaseClient } from '../api/supabase-client';
 import { buildProductSetInput, handleForModel } from './mappers';
+import { RunContext } from '../logging';
+import { checkDrift } from '../db/drift-check';
 
 type PushSummary = {
   upserted: number;
@@ -38,72 +43,92 @@ export async function runShopifyPush(): Promise<PushSummary> {
     throw new Error('Shopify is not configured (set SHOPIFY_STORE_DOMAIN and SHOPIFY_ADMIN_ACCESS_TOKEN)');
   }
 
+  const run = new RunContext('shopify-push');
+  const log: Logger = run.log;
+
+  // Wire modules to the run logger
+  const shopify = new ShopifyClient(log);
+  const supabase = new SupabaseClient(log);
+  configureProductsApi(log, supabase);
+
   const summary: PushSummary = { upserted: 0, variantsSynced: 0, deleted: 0, failed: 0 };
 
-  const locationId = await shopifyClient.getLocationId();
-  logger.info('Resolved Shopify inventory location', { locationId });
+  try {
+    // Pre-run: DB drift check
+    await checkDrift(log);
 
-  const [entries, existingLinks] = await Promise.all([
-    getPromotedModelsWithVariants(),
-    getAllStoreProductLinks(),
-  ]);
+    const locationId = await shopify.getLocationId();
+    log.info(`Resolved Shopify inventory location (${locationId})`);
 
-  const linkByModel = new Map(existingLinks.map((l) => [l.model_code, l]));
-  const currentModelCodes = new Set(entries.map((e) => e.model.model_code));
+    const [entries, existingLinks] = await Promise.all([
+      getPromotedModelsWithVariants(),
+      getAllStoreProductLinks(),
+    ]);
 
-  logger.info('Starting Shopify push', {
-    promotedModels: entries.length,
-    knownLinks: existingLinks.length,
-  });
+    const linkByModel = new Map(existingLinks.map((l) => [l.model_code, l]));
+    const currentModelCodes = new Set(entries.map((e) => e.model.model_code));
 
-  // --- Upserts ---
-  for (const entry of entries) {
-    try {
-      await upsertModel(entry, linkByModel.get(entry.model.model_code)?.external_product_id ?? null, locationId, summary);
-    } catch (error) {
-      summary.failed++;
-      const err = error as Error;
-      logger.error('Failed to upsert model to Shopify', { modelCode: entry.model.model_code, error: err.message });
-      await logStoreSync({
-        scope: 'product',
-        local_code: entry.model.model_code,
-        action: 'update',
-        status: 'failed',
-        message: err.message,
-      });
+    log.info(`Starting Shopify push (${entries.length} promoted models, ${existingLinks.length} existing links)`);
+
+    // --- Upserts ---
+    for (const entry of entries) {
+      try {
+        await upsertModel(entry, linkByModel.get(entry.model.model_code)?.external_product_id ?? null, locationId, summary, shopify, log);
+      } catch (error) {
+        summary.failed++;
+        const err = error as Error;
+        log.error(`Failed to upsert model ${entry.model.model_code} to Shopify (${err.message})`);
+        await logStoreSync({
+          scope: 'product',
+          local_code: entry.model.model_code,
+          action: 'update',
+          status: 'failed',
+          message: err.message,
+        });
+      }
     }
+
+    // --- Reconcile deletions ---
+    for (const link of existingLinks) {
+      if (currentModelCodes.has(link.model_code)) continue;
+      try {
+        await shopify.deleteProduct(link.external_product_id);
+        await deleteStoreProductLink(link.model_code);
+        summary.deleted++;
+        await logStoreSync({
+          scope: 'product',
+          local_code: link.model_code,
+          external_id: link.external_product_id,
+          action: 'delete',
+          status: 'success',
+        });
+      } catch (error) {
+        summary.failed++;
+        const err = error as Error;
+        log.error(`Failed to delete stale Shopify product ${link.model_code} (${err.message})`);
+        await logStoreSync({
+          scope: 'product',
+          local_code: link.model_code,
+          external_id: link.external_product_id,
+          action: 'delete',
+          status: 'failed',
+          message: err.message,
+        });
+      }
+    }
+
+    log.info(`Shopify push complete (upserted: ${summary.upserted}, variants: ${summary.variantsSynced}, deleted: ${summary.deleted}, failed: ${summary.failed})`);
+
+    await run.finish('success', {
+      summary: { upserted: summary.upserted, variantsSynced: summary.variantsSynced, deleted: summary.deleted, failed: summary.failed },
+    });
+  } catch (error) {
+    const err = error as Error;
+    log.error({ error: err.message, stack: err.stack }, 'Shopify push failed');
+    await run.finish('failed', { error: err });
+    throw error;
   }
 
-  // --- Reconcile deletions ---
-  for (const link of existingLinks) {
-    if (currentModelCodes.has(link.model_code)) continue;
-    try {
-      await shopifyClient.deleteProduct(link.external_product_id);
-      await deleteStoreProductLink(link.model_code);
-      summary.deleted++;
-      await logStoreSync({
-        scope: 'product',
-        local_code: link.model_code,
-        external_id: link.external_product_id,
-        action: 'delete',
-        status: 'success',
-      });
-    } catch (error) {
-      summary.failed++;
-      const err = error as Error;
-      logger.error('Failed to delete stale Shopify product', { modelCode: link.model_code, error: err.message });
-      await logStoreSync({
-        scope: 'product',
-        local_code: link.model_code,
-        external_id: link.external_product_id,
-        action: 'delete',
-        status: 'failed',
-        message: err.message,
-      });
-    }
-  }
-
-  logger.info('Shopify push complete', summary);
   return summary;
 }
 
@@ -111,17 +136,17 @@ async function upsertModel(
   entry: ModelWithVariants,
   knownProductId: string | null,
   locationId: string,
-  summary: PushSummary
+  summary: PushSummary,
+  shopify: ShopifyClient,
+  log: Logger,
 ): Promise<void> {
   const modelCode = entry.model.model_code;
   const handle = handleForModel(modelCode);
 
-  // Prefer the stored id; otherwise look up by handle to adopt any product that
-  // already exists in Shopify (e.g. created by a previous run before linking).
-  const existingId = knownProductId ?? (await shopifyClient.findProductIdByHandle(handle));
+  const existingId = knownProductId ?? (await shopify.findProductIdByHandle(handle));
 
   const input = buildProductSetInput(entry, existingId);
-  const result = await shopifyClient.productSet(input);
+  const result = await shopify.productSet(input);
 
   await upsertStoreProductLink({
     model_code: modelCode,
@@ -137,7 +162,7 @@ async function upsertModel(
   for (const v of entry.variants) {
     const shopifyVariant = variantBySku.get(v.product_code);
     if (!shopifyVariant) {
-      logger.warn('Shopify did not return a variant for SKU', { modelCode, sku: v.product_code });
+      log.warn(`Shopify did not return a variant for SKU ${v.product_code} (model ${modelCode})`);
       continue;
     }
 
@@ -158,7 +183,7 @@ async function upsertModel(
     summary.variantsSynced++;
   }
 
-  await shopifyClient.setInventoryQuantities(inventoryUpdates);
+  await shopify.setInventoryQuantities(inventoryUpdates);
 
   await updateModelSyncStatus(modelCode, new Date());
   summary.upserted++;
@@ -180,16 +205,16 @@ if (config.nodeEnv !== 'test' && config.shopify.pushCron) {
       await runShopifyPush();
     } catch (error) {
       const err = error as Error;
-      logger.error('Scheduled Shopify push failed', { error: err.message });
+      logger.error({ error: err.message }, 'Scheduled Shopify push failed');
     }
   });
-  logger.info('Shopify push cron scheduled', { schedule: config.shopify.pushCron });
+  logger.info(`Shopify push cron scheduled (${config.shopify.pushCron})`);
 }
 
 if (require.main === module) {
   runShopifyPush().catch((error) => {
     const err = error as Error;
-    logger.error('Shopify production push failed', { error: err.message, stack: err.stack });
+    logger.error({ error: err.message, stack: err.stack }, 'Shopify production push failed');
     process.exitCode = 1;
   });
 }

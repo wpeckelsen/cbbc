@@ -10,6 +10,7 @@
     "shopify:push:prod": "ts-node src/shopify/push-production.ts",
     "db:status": "ts-node src/db/status.ts",
     "db:migrate": "ts-node src/db/migrate.ts",
+    "db:check": "ts-node src/db/drift-check.ts",
     "db:reset:remote": "ts-node src/db/reset-remote.ts",
     "test": "jest",
     "lint": "eslint src/**/*.ts",

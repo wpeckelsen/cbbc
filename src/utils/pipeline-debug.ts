@@ -1,13 +1,10 @@
-import { logger } from '../logger';
-
-function isEnabled(): boolean {
-  return process.env.PIPELINE_DEBUG === '1';
-}
+import { Logger } from 'pino';
+import { logger as defaultLogger } from '../logger';
 
 function truncate(value: unknown, maxLen: number): unknown {
   if (typeof value === 'string') {
     if (value.length <= maxLen) return value;
-    return value.slice(0, maxLen) + '…';
+    return value.slice(0, maxLen) + '\u2026';
   }
   return value;
 }
@@ -24,6 +21,12 @@ function redactRecord(record: Record<string, unknown>, maxStringLen: number): Re
   return out;
 }
 
+/**
+ * Log a boundary sample at **debug** level.
+ *
+ * Previously gated by `PIPELINE_DEBUG=1`; now fires whenever the logger's
+ * level includes `debug` (i.e. `LOG_LEVEL=debug`).
+ */
 export function logBoundarySample(
   boundary: string,
   records: Array<Record<string, unknown>>,
@@ -31,9 +34,10 @@ export function logBoundarySample(
     sampleIndex?: number;
     maxKeys?: number;
     maxStringLen?: number;
-  }
+  },
+  log: Logger = defaultLogger,
 ): void {
-  if (!isEnabled()) return;
+  if (!log.isLevelEnabled('debug')) return;
 
   const sampleIndex = opts?.sampleIndex ?? 0;
   const maxKeys = opts?.maxKeys ?? 200;
@@ -43,7 +47,7 @@ export function logBoundarySample(
   const sample = records[sampleIndex];
 
   if (!sample) {
-    logger.info({ boundary, count }, 'PIPELINE_DEBUG boundary');
+    log.debug({ boundary, count }, 'Boundary sample (empty)');
     return;
   }
 
@@ -51,7 +55,7 @@ export function logBoundarySample(
   const limitedKeys = keys.slice(0, maxKeys);
   const redacted = redactRecord(sample, maxStringLen);
 
-  logger.info(
+  log.debug(
     {
       boundary,
       count,
@@ -60,6 +64,6 @@ export function logBoundarySample(
       sample: redacted,
       keysTruncated: keys.length > limitedKeys.length,
     },
-    'PIPELINE_DEBUG boundary'
+    'Boundary sample',
   );
 }

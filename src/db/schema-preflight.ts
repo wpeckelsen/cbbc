@@ -1,4 +1,5 @@
-import { logger } from '../logger';
+import { Logger } from 'pino';
+import { logger as defaultLogger } from '../logger';
 import { createClient } from './migration-utils';
 
 const columnsCache = new Map<string, Set<string>>();
@@ -29,7 +30,8 @@ async function fetchTableColumns(table: string): Promise<Set<string>> {
 export async function preflightDropUnknownColumns(
   table: string,
   records: Array<Record<string, any>>,
-  boundary: string
+  boundary: string,
+  log: Logger = defaultLogger,
 ): Promise<{ records: Array<Record<string, any>>; droppedKeys: string[] }> {
   if (records.length === 0) return { records, droppedKeys: [] };
 
@@ -38,7 +40,7 @@ export async function preflightDropUnknownColumns(
     columns = await fetchTableColumns(table);
   } catch (error) {
     const err = error as Error;
-    logger.warn(
+    log.warn(
       { boundary, table, error: err.message },
       'Schema preflight skipped (failed to introspect DB columns)'
     );
@@ -63,7 +65,7 @@ export async function preflightDropUnknownColumns(
     return out;
   });
 
-  logger.warn(
+  log.warn(
     {
       boundary,
       table,
