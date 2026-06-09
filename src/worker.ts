@@ -388,7 +388,7 @@ async function runPipeline(): Promise<void> {
       await clearStagingTablesForDev();
     }
 
-    logBoundarySample('pre-ecwid:products', cappedVariantsToPromote as any, { maxStringLen: 80 });
+    logBoundarySample('pre-store-sync:products', cappedVariantsToPromote as any, { maxStringLen: 80 });
 
     // Cache files are kept for subsequent runs (no cleanup)
     logger.info('Pipeline completed successfully (cached files preserved in cache/ftp/)');

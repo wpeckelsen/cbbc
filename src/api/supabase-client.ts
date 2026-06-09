@@ -152,7 +152,8 @@ export class SupabaseClient {
     orderBy?: {
       column: string;
       ascending?: boolean;
-    }
+    },
+    offset?: number
   ): Promise<T[]> {
     const params: Record<string, string> = {
       select: columns,
@@ -166,6 +167,10 @@ export class SupabaseClient {
 
     if (limit) {
       params['limit'] = limit.toString();
+    }
+
+    if (typeof offset === 'number' && offset > 0) {
+      params['offset'] = offset.toString();
     }
 
     if (orderBy) {

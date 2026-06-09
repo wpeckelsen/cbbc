@@ -29,10 +29,14 @@ export const config = {
     supabaseUrl: process.env.SUPABASE_API_BASE_URL || '',
     supabaseKey: process.env.SUPABASE_SECRET_KEY || '',
   },
-  ecwid: {
-    storeId: process.env.ECWID_STORE_ID || '',
-    apiToken: process.env.ECWID_SECRET_TOKEN || '',
-    apiBaseUrl: process.env.ECWID_API_BASE_URL || '',
+  shopify: {
+    storeDomain: process.env.SHOPIFY_STORE_DOMAIN || '',
+    adminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || '',
+    apiVersion: process.env.SHOPIFY_API_VERSION || '2024-10',
+    // Optional: explicit inventory location. Falls back to the store's primary location when empty.
+    locationId: process.env.SHOPIFY_LOCATION_ID || '',
+    // Optional cron for the weekly push (e.g. '0 3 * * 1' = Mon 03:00). Empty = disabled (manual only).
+    pushCron: process.env.SHOPIFY_PUSH_CRON || '',
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',

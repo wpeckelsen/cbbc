@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This service ingests a supplier product feed (Duell FTP CSV exports), normalizes and validates it, selects a capped subset of “good” products, and writes both staging and production-ready tables in Supabase. It also contains a small Ecwid integration for pushing a subset of products.
+This service ingests a supplier product feed (Duell FTP CSV exports), normalizes and validates it, selects a capped subset of “good” products, and writes both staging and production-ready tables in Supabase. A separate Shopify integration pushes the promoted catalogue (models + variants) to a Shopify storefront.
 
 ## Tech stack
 
@@ -24,7 +24,9 @@ This service ingests a supplier product feed (Duell FTP CSV exports), normalizes
 - **Supabase REST client**: `src/api/supabase-client.ts`
 - **Validation + enrichment**: `src/validation/product-validator.ts`
 - **Filtering**: `src/filters/product-filter.ts`
-- **Ecwid push script**: `src/ecwid/push-production.ts` (limited / partially aligned with current prod tables)
+- **Shopify push script**: `src/shopify/push-production.ts` (`npm run shopify:push:prod`)
+- **Shopify GraphQL client**: `src/shopify/shopify-client.ts`
+- **Production → Shopify mappers**: `src/shopify/mappers.ts`
 
 ## Data flow (authoritative)
 
@@ -168,14 +170,46 @@ Foreign-key safety:
 
 When `PIPELINE_DEBUG=1`, the pipeline logs “boundary samples” (keys + a sample record) at multiple points using `logBoundarySample()` in `src/utils/pipeline-debug.ts`.
 
-## Ecwid integration status
+## Shopify integration
 
-- `src/ecwid/push-production.ts` uses `getNewestProductsFromProduction()` which currently reads from a `products` table.
-- The primary pipeline now promotes into `product_models` + `product_variants`.
+A separate, manually-triggered step (`npm run shopify:push:prod`, optionally a weekly
+cron via `SHOPIFY_PUSH_CRON`) pushes the promoted catalogue to Shopify via the GraphQL
+Admin API.
 
-So, the Ecwid push script is currently a minimal/partial integration and may need alignment with the current production tables if it is used as the main sync path.
+Flow (`src/shopify/push-production.ts`):
+
+1. `getPromotedModelsWithVariants()` reads `product_models` + `product_variants`
+   (paginated) and groups variants under their model.
+2. For each model, `buildProductSetInput()` maps it to a Shopify `ProductSetInput`
+   and `ShopifyClient.productSet()` upserts the product + all its variants in one call.
+3. Inventory is written per variant to a single location via `setInventoryQuantities()`.
+4. Local mappings are recorded in `store_product_links` / `store_variant_links`.
+5. **Reconciliation**: any model in the link tables that is no longer in the promoted
+   set has its Shopify product deleted and its links removed.
+
+Mapping rules:
+
+| Source (production) | Shopify |
+|---|---|
+| `product_models.model_code` | product `handle` = `cbbc-{model_code}` + metafield `cbbc.model_code` |
+| `product_models.name_en` | product `title` |
+| `product_models.vendor_name` | product `vendor` (note: `brand` is dropped) |
+| `product_models.category_codes` | product `tags` |
+| `product_variants.product_code` | variant `sku` |
+| `product_variants.name_en` | variant option value (multi-variant models only; single-variant models use the default option) |
+| `product_variants.barcode` | variant `barcode` |
+| `product_variants.price_eur_excl_vat` | variant `price` (Shopify adds VAT) |
+| `product_variants.stock_total` | inventory quantity (single location) |
+| `product_variants.image_url` | product/variant media |
+
+Idempotency: products are matched by the deterministic handle (and stored external
+id); variants by `sku`. `productSet` reconciles variants by SKU automatically, so a
+variant removed from a model's set is removed from the Shopify product.
+
+Bookkeeping tables (store-agnostic, migration `0006`): `store_product_links`,
+`store_variant_links`, `store_sync_logs` (replaces `ecwid_sync_logs`).
 
 ## Security / sanitization expectations
 
 - Do not commit secrets. Configuration comes from environment variables (`src/config/env.ts`).
-- Documentation should refer to systems (Duell FTP, Supabase, Ecwid) but must not include credentials or sensitive URLs/tokens.
+- Documentation should refer to systems (Duell FTP, Supabase, Shopify) but must not include credentials or sensitive URLs/tokens.

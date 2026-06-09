@@ -1,13 +1,13 @@
 {
   "name": "cbbc-ftp-worker",
   "version": "1.0.0",
-  "description": "Scheduled service to fetch products from FTP, validate, store in DB, and sync to Ecwid",
+  "description": "Scheduled service to fetch products from FTP, validate, store in DB, and sync to Shopify",
   "main": "dist/worker.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/worker.js",
     "dev": "ts-node-dev --respawn --transpile-only src/worker.ts",
-    "ecwid:push:prod": "ts-node src/ecwid/push-production.ts",
+    "shopify:push:prod": "ts-node src/shopify/push-production.ts",
     "db:status": "ts-node src/db/status.ts",
     "db:migrate": "ts-node src/db/migrate.ts",
     "db:reset:remote": "ts-node src/db/reset-remote.ts",
