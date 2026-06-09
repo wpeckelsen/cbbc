@@ -1,5 +1,4 @@
 import { ProductRecord, PriceRecord, StockRecord } from '../parsers/csv-parser';
-import { logger } from '../logger';
 
 export interface ValidationError {
   field: string;

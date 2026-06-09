@@ -6,8 +6,11 @@ import { FtpClient } from './ftp/ftp-client';
 import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, parseCategoryHierarchyCsv, parseImagesCsv } from './parsers/csv-parser';
 import { ProductValidator } from './validation/product-validator';
 import { ProductFilter } from './filters/product-filter';
-import { insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev } from './api/products-api';
+import { configureProductsApi, insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev } from './api/products-api';
 import { logBoundarySample } from './utils/pipeline-debug';
+import { RunContext } from './logging';
+import { checkDrift } from './db/drift-check';
+import { SupabaseClient } from './api/supabase-client';
 import fs from 'fs';
 import path from 'path';
 
@@ -64,9 +67,16 @@ function isConsistentModelGroup(variants: any[]): boolean {
 }
 
 async function runPipeline(): Promise<void> {
-  logger.info('Starting FTP product pipeline');
+  const run = new RunContext('pipeline');
+  const log = run.log;
 
-  const ftpClient = new FtpClient();
+  log.info('Starting FTP product pipeline');
+
+  // Wire the run logger into shared modules
+  const supabase = new SupabaseClient(log);
+  configureProductsApi(log, supabase);
+
+  const ftpClient = new FtpClient(log);
   const validator = new ProductValidator();
   const productFilter = new ProductFilter({
     requiresPrice: true,
@@ -79,9 +89,15 @@ async function runPipeline(): Promise<void> {
       const hasNoValidationErrors = Array.isArray(p.errors) && p.errors.length === 0;
       return stockTotal > 1 && hasImage && hasCategories && hasBrand && hasNoValidationErrors;
     },
-  });
+  }, log);
+
+  let pipelineModels = 0;
+  let pipelineVariants = 0;
 
   try {
+    // Pre-run: DB drift check
+    await checkDrift(log);
+
     // Step 1: Connect to FTP
     await ftpClient.connect();
 
@@ -101,42 +117,44 @@ async function runPipeline(): Promise<void> {
       { remote: '/Data/product_images.csv', local: path.join(cacheDir, 'images.csv') },
     ];
 
+    let downloadedCount = 0;
+    let cachedCount = 0;
     for (const file of filesToDownload) {
       try {
+        const existed = fs.existsSync(file.local);
         await ftpClient.downloadWithCache(file.remote, file.local);
+        if (existed) cachedCount++; else downloadedCount++;
       } catch (error) {
         const err = error as Error;
-        logger.warn(`Failed to download ${file.remote}, skipping`, { error: err.message });
+        log.warn(`Failed to download ${file.remote}, skipping (${err.message})`);
       }
     }
+    log.info(`Downloaded ${filesToDownload.length} CSV files (${cachedCount} from cache)`);
 
     // Step 3: Parse files
-    const products = fs.existsSync(path.join(cacheDir, 'products.csv')) ? await parseProductsCsv(path.join(cacheDir, 'products.csv')) : [];
+    const products = fs.existsSync(path.join(cacheDir, 'products.csv')) ? await parseProductsCsv(path.join(cacheDir, 'products.csv'), log) : [];
     for (const p of products) normalizeHyphenKeysInPlace(p);
-    const prices = fs.existsSync(path.join(cacheDir, 'prices.csv')) ? await parsePricesCsv(path.join(cacheDir, 'prices.csv')) : [];
-    const stockProduct = fs.existsSync(path.join(cacheDir, 'stock_product.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_product.csv'), 'product_code') : [];
-    const categories = fs.existsSync(path.join(cacheDir, 'categories.csv')) ? await parseCategoriesCsv(path.join(cacheDir, 'categories.csv')) : [];
-    const categoryHierarchy = fs.existsSync(path.join(cacheDir, 'category_hierarchy.csv')) ? await parseCategoryHierarchyCsv(path.join(cacheDir, 'category_hierarchy.csv')) : [];
-    const images = fs.existsSync(path.join(cacheDir, 'images.csv')) ? await parseImagesCsv(path.join(cacheDir, 'images.csv')) : [];
+    const prices = fs.existsSync(path.join(cacheDir, 'prices.csv')) ? await parsePricesCsv(path.join(cacheDir, 'prices.csv'), log) : [];
+    const stockProduct = fs.existsSync(path.join(cacheDir, 'stock_product.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_product.csv'), 'product_code', log) : [];
+    const categories = fs.existsSync(path.join(cacheDir, 'categories.csv')) ? await parseCategoriesCsv(path.join(cacheDir, 'categories.csv'), log) : [];
+    const categoryHierarchy = fs.existsSync(path.join(cacheDir, 'category_hierarchy.csv')) ? await parseCategoryHierarchyCsv(path.join(cacheDir, 'category_hierarchy.csv'), log) : [];
+    const images = fs.existsSync(path.join(cacheDir, 'images.csv')) ? await parseImagesCsv(path.join(cacheDir, 'images.csv'), log) : [];
 
-    logBoundarySample('post-parse:products', products as any);
-    logBoundarySample('post-parse:prices', prices as any);
-    logBoundarySample('post-parse:stock_product', stockProduct as any);
-    logBoundarySample('post-parse:categories', categories as any);
-    logBoundarySample('post-parse:category_hierarchy', categoryHierarchy as any);
-    logBoundarySample('post-parse:images', images as any);
+    logBoundarySample('post-parse:products', products as any, undefined, log);
+    logBoundarySample('post-parse:prices', prices as any, undefined, log);
+    logBoundarySample('post-parse:stock_product', stockProduct as any, undefined, log);
+    logBoundarySample('post-parse:categories', categories as any, undefined, log);
+    logBoundarySample('post-parse:category_hierarchy', categoryHierarchy as any, undefined, log);
+    logBoundarySample('post-parse:images', images as any, undefined, log);
 
-    logger.info(`Parsed ${products.length} products from FTP`);
+    log.info(`Parsed ${products.length} product rows`);
 
     // Step 4: Build lookup maps for O(1) access (avoid O(n²) .find() loops)
-    logger.info('Building lookup maps for prices, stock, and images...');
     const priceMap = new Map(prices.map(p => [p.PRODUCT_CODE, p]));
     const stockMap = new Map(stockProduct.map(s => [s.PRODUCT_CODE, s]));
     const imageMap = new Map(images.map(i => [i.PRODUCT_CODE, i]));
-    logger.info('Lookup maps built', { prices: priceMap.size, stock: stockMap.size, images: imageMap.size });
 
     // Step 5: Validate and enrich products (in-memory, before sending to DB)
-    logger.info('Enriching products...');
     const parentRows: any[] = [];
     const variantRows: any[] = [];
     for (const p of products) {
@@ -145,11 +163,7 @@ async function runPipeline(): Promise<void> {
       else parentRows.push(p);
     }
 
-    logger.info('Split products feed', {
-      total: products.length,
-      parentRows: parentRows.length,
-      variantRows: variantRows.length,
-    });
+    log.info(`Split into ${parentRows.length} parent rows + ${variantRows.length} variant rows`);
 
     const modelMetadataByCode = new Map<string, any>();
     for (const p of parentRows) {
@@ -171,9 +185,7 @@ async function runPipeline(): Promise<void> {
       });
     }
 
-    logger.info('Built model metadata map from parent rows', {
-      modelsWithParentRow: modelMetadataByCode.size,
-    });
+
 
     const isSellableParentRow = (p: any): boolean => {
       const productCode = normalizeNonEmptyString(p.product_code);
@@ -197,9 +209,7 @@ async function runPipeline(): Promise<void> {
     const rowsToEnrich = [...variantRows, ...sellableParentRows];
 
     if (sellableParentRows.length > 0) {
-      logger.info('Included sellable parent rows as variants', {
-        sellableParentRows: sellableParentRows.length,
-      });
+      log.debug(`Included ${sellableParentRows.length} sellable parent rows as variants`);
     }
 
     const validatedProducts = rowsToEnrich.map((product) => {
@@ -208,9 +218,9 @@ async function runPipeline(): Promise<void> {
       const image = imageMap.get(product.product_code);
       return validator.enrichProduct(product, price, stock, image ? { IMAGE_URL: image.IMAGE_URL } : undefined);
     });
-    logger.info('Enrichment complete');
+    log.info(`Enriched ${validatedProducts.length} variants`);
 
-    logBoundarySample('post-validate:validated_products', validatedProducts as any);
+    logBoundarySample('post-validate:validated_products', validatedProducts as any, undefined, log);
 
     // Step 6: Reject inconsistent models (brand/vendor/category mismatch)
     type ModelTruth = { brand: string; vendor: string; categoryKey: string };
@@ -274,29 +284,14 @@ async function runPipeline(): Promise<void> {
     });
 
     if (droppedVariants > 0) {
-      logger.warn(
-        {
-          droppedVariants,
-          affectedModels: droppedModelCodes.size,
-          totalModels: variantsByModel.size,
-        },
-        'Dropped variants conflicting with model truth (parent-preferred)'
-      );
+      log.warn(`Dropped ${droppedVariants} variants conflicting with model truth (${droppedModelCodes.size} models affected)`);
     }
 
     // Step 7: Determine model eligibility via qualifying variants (stock_total > 1)
-    logger.info(`Pre-filter: ${consistentValidatedVariants.length} validated variants (consistent models only)`);
     const filterStats = productFilter.getFilterStats(consistentValidatedVariants);
-    logger.info('Filter statistics', {
-      total: filterStats.total,
-      passed: filterStats.passed,
-      failed: filterStats.failed,
-      passRate: filterStats.passRate,
-      failureReasons: filterStats.failureReasons,
-    });
 
     const qualifyingVariants = productFilter.filterProducts(consistentValidatedVariants);
-    logger.info(`Post-filter: ${qualifyingVariants.length} variants passed filter (qualifying variants)`);
+    log.info(`Filter: ${qualifyingVariants.length} / ${consistentValidatedVariants.length} variants passed (${filterStats.passRate.toFixed(1)}%)`);
 
     // Step 8: Eligible models are those with >= 1 qualifying variant, then cap by model count
     const eligibleModelSet = new Set<string>();
@@ -333,24 +328,9 @@ async function runPipeline(): Promise<void> {
       return cappedModelCodeSet.has(modelCode);
     });
 
-    logger.info('Applied hard cap (models)', {
-      models: cappedModelCodes.length,
-      variants: cappedVariantsToPromote.length,
-      limit: MVP_MODEL_LIMIT,
-    });
-
-    const variantsPerModel = new Map<string, number>();
-    for (const v of cappedVariantsToPromote) {
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      variantsPerModel.set(modelCode, (variantsPerModel.get(modelCode) ?? 0) + 1);
-    }
-    const multiVariantModels = Array.from(variantsPerModel.values()).filter((n) => n > 1).length;
-    const maxVariantsInModel = Math.max(0, ...Array.from(variantsPerModel.values()));
-    logger.info('Variants per model (post-cap)', {
-      models: variantsPerModel.size,
-      multiVariantModels,
-      maxVariantsInModel,
-    });
+    pipelineModels = cappedModelCodes.length;
+    pipelineVariants = cappedVariantsToPromote.length;
+    log.info(`Applied hard cap: ${pipelineModels} models, ${pipelineVariants} variants (limit: ${MVP_MODEL_LIMIT})`);
 
     // Step 9: Filter related data to match only the selected variant SKUs
     const cappedProductCodes = new Set(cappedVariantsToPromote.map((v) => v.product_code));
@@ -359,7 +339,7 @@ async function runPipeline(): Promise<void> {
     const cappedStockProduct = stockProduct.filter((s) => typeof s.PRODUCT_CODE === 'string' && cappedProductCodes.has(s.PRODUCT_CODE));
     const cappedImages = images.filter((i) => cappedProductCodes.has(i.PRODUCT_CODE));
 
-    logger.info(`Filtered related data: ${cappedPrices.length} prices, ${cappedStockProduct.length} stock records, ${cappedImages.length} images`);
+
 
     // Step 10: Insert ONLY filtered data to staging (not all 127k variants!)
     if (config.dev.cleanSlate) {
@@ -388,13 +368,17 @@ async function runPipeline(): Promise<void> {
       await clearStagingTablesForDev();
     }
 
-    logBoundarySample('pre-store-sync:products', cappedVariantsToPromote as any, { maxStringLen: 80 });
+    logBoundarySample('pre-store-sync:products', cappedVariantsToPromote as any, { maxStringLen: 80 }, log);
 
-    // Cache files are kept for subsequent runs (no cleanup)
-    logger.info('Pipeline completed successfully (cached files preserved in cache/ftp/)');
+    log.info('Pipeline completed successfully');
+
+    await run.finish('success', {
+      summary: { models: pipelineModels, variants: pipelineVariants },
+    });
   } catch (error) {
     const err = error as Error;
-    logger.error('Pipeline failed', { error: err.message, stack: err.stack });
+    log.error({ error: err.message, stack: err.stack }, 'Pipeline failed');
+    await run.finish('failed', { error: err });
     throw error;
   } finally {
     await ftpClient.disconnect();

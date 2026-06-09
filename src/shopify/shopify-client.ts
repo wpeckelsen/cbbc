@@ -1,5 +1,6 @@
+import { Logger } from 'pino';
 import { config } from '../config/env';
-import { logger } from '../logger';
+import { logger as defaultLogger } from '../logger';
 
 /**
  * Minimal Shopify GraphQL Admin API client.
@@ -35,12 +36,14 @@ export class ShopifyClient {
   private apiVersion: string;
   private explicitLocationId: string;
   private cachedLocationId: string | null = null;
+  private log: Logger;
 
-  constructor() {
+  constructor(log: Logger = defaultLogger) {
     this.storeDomain = config.shopify.storeDomain;
     this.accessToken = config.shopify.adminAccessToken;
     this.apiVersion = config.shopify.apiVersion;
     this.explicitLocationId = config.shopify.locationId;
+    this.log = log;
   }
 
   private assertConfigured(): void {
@@ -85,7 +88,7 @@ export class ShopifyClient {
       if (attempt < MAX_ATTEMPTS) {
         const retryAfter = Number(res.headers.get('Retry-After'));
         const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : backoffMs(attempt);
-        logger.warn('Shopify transient error, retrying', { status: res.status, attempt, waitMs });
+        this.log.warn(`Shopify transient error (HTTP ${res.status}), retry ${attempt}`);
         await sleep(waitMs);
         return this.graphql<T>(query, variables, attempt + 1);
       }
@@ -109,7 +112,7 @@ export class ShopifyClient {
         const status = json.extensions?.cost?.throttleStatus;
         // Give the leaky bucket ~2s to refill, with exponential backoff as a floor.
         const waitMs = Math.max(2000, backoffMs(attempt));
-        logger.warn('Shopify THROTTLED, backing off', { attempt, waitMs, throttleStatus: status });
+        this.log.warn(`Shopify THROTTLED, backing off (attempt ${attempt}, wait ${waitMs}ms)`);
         await sleep(waitMs);
         return this.graphql<T>(query, variables, attempt + 1);
       }

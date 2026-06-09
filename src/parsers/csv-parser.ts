@@ -1,6 +1,7 @@
 import fs from 'fs';
 import csv from 'csv-parser';
-import { logger } from '../logger';
+import { Logger } from 'pino';
+import { logger as defaultLogger } from '../logger';
 
 export interface ProductRecord {
   product_code: string;
@@ -35,18 +36,18 @@ export interface ProductRecord {
   [key: string]: any;
 }
 
-export async function parseProductsCsv(filePath: string): Promise<ProductRecord[]> {
+export async function parseProductsCsv(filePath: string, log: Logger = defaultLogger): Promise<ProductRecord[]> {
   const results: ProductRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
-        logger.info('Parsed products CSV', { count: results.length });
+        log.info(`Parsed products CSV (${results.length} rows)`);
         resolve(results);
       })
       .on('error', (error) => {
-        logger.error('Failed to parse products CSV', { filePath, error: error.message });
+        log.error({ filePath, error: error.message }, 'Failed to parse products CSV');
         reject(error);
       });
   });
@@ -68,18 +69,18 @@ export interface PriceRecord {
   [key: string]: any;
 }
 
-export async function parsePricesCsv(filePath: string): Promise<PriceRecord[]> {
+export async function parsePricesCsv(filePath: string, log: Logger = defaultLogger): Promise<PriceRecord[]> {
   const results: PriceRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
-        logger.info('Parsed prices CSV', { count: results.length });
+        log.info(`Parsed prices CSV (${results.length} rows)`);
         resolve(results);
       })
       .on('error', (error) => {
-        logger.error('Failed to parse prices CSV', { filePath, error: error.message });
+        log.error({ filePath, error: error.message }, 'Failed to parse prices CSV');
         reject(error);
       });
   });
@@ -94,18 +95,18 @@ export interface StockRecord {
   [key: string]: any;
 }
 
-export async function parseStockCsv(filePath: string, source: 'product_code' | 'ean'): Promise<StockRecord[]> {
+export async function parseStockCsv(filePath: string, source: 'product_code' | 'ean', log: Logger = defaultLogger): Promise<StockRecord[]> {
   const results: StockRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
-        logger.info('Parsed stock CSV', { source, count: results.length });
+        log.info(`Parsed stock CSV [${source}] (${results.length} rows)`);
         resolve(results);
       })
       .on('error', (error) => {
-        logger.error('Failed to parse stock CSV', { filePath, source, error: error.message });
+        log.error({ filePath, source, error: error.message }, 'Failed to parse stock CSV');
         reject(error);
       });
   });
@@ -118,18 +119,18 @@ export interface CategoryRecord {
   LANGUAGE_NUMBER: string;
 }
 
-export async function parseCategoriesCsv(filePath: string): Promise<CategoryRecord[]> {
+export async function parseCategoriesCsv(filePath: string, log: Logger = defaultLogger): Promise<CategoryRecord[]> {
   const results: CategoryRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
-        logger.info('Parsed categories CSV', { count: results.length });
+        log.info(`Parsed categories CSV (${results.length} rows)`);
         resolve(results);
       })
       .on('error', (error) => {
-        logger.error('Failed to parse categories CSV', { filePath, error: error.message });
+        log.error({ filePath, error: error.message }, 'Failed to parse categories CSV');
         reject(error);
       });
   });
@@ -141,18 +142,18 @@ export interface CategoryHierarchyRecord {
   GROUP_LEVEL: string;
 }
 
-export async function parseCategoryHierarchyCsv(filePath: string): Promise<CategoryHierarchyRecord[]> {
+export async function parseCategoryHierarchyCsv(filePath: string, log: Logger = defaultLogger): Promise<CategoryHierarchyRecord[]> {
   const results: CategoryHierarchyRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
-        logger.info('Parsed category hierarchy CSV', { count: results.length });
+        log.info(`Parsed category hierarchy CSV (${results.length} rows)`);
         resolve(results);
       })
       .on('error', (error) => {
-        logger.error('Failed to parse category hierarchy CSV', { filePath, error: error.message });
+        log.error({ filePath, error: error.message }, 'Failed to parse category hierarchy CSV');
         reject(error);
       });
   });
@@ -164,18 +165,18 @@ export interface ImageRecord {
   IMAGE_NAME: string;
 }
 
-export async function parseImagesCsv(filePath: string): Promise<ImageRecord[]> {
+export async function parseImagesCsv(filePath: string, log: Logger = defaultLogger): Promise<ImageRecord[]> {
   const results: ImageRecord[] = [];
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
       .on('data', (data: any) => results.push(data))
       .on('end', () => {
-        logger.info('Parsed images CSV', { count: results.length });
+        log.info(`Parsed images CSV (${results.length} rows)`);
         resolve(results);
       })
       .on('error', (error) => {
-        logger.error('Failed to parse images CSV', { filePath, error: error.message });
+        log.error({ filePath, error: error.message }, 'Failed to parse images CSV');
         reject(error);
       });
   });

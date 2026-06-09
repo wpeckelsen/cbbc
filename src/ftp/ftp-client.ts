@@ -1,6 +1,7 @@
 import { Client } from 'basic-ftp';
+import { Logger } from 'pino';
 import { config } from '../config/env';
-import { logger } from '../logger';
+import { logger as defaultLogger } from '../logger';
 import fs from 'fs';
 import path from 'path';
 
@@ -12,10 +13,12 @@ export interface FtpFile {
 
 export class FtpClient {
   private client: Client;
+  private log: Logger;
 
-  constructor() {
+  constructor(log: Logger = defaultLogger) {
     this.client = new Client();
     this.client.ftp.verbose = config.nodeEnv === 'development';
+    this.log = log;
   }
 
   async connect(): Promise<void> {
@@ -28,17 +31,17 @@ export class FtpClient {
         secure: config.ftp.secure, // Use FTPS if enabled
         secureOptions: config.ftp.secure ? { rejectUnauthorized: false } : undefined, // For self-signed certs, but ideally verify
       });
-      logger.info('Connected to FTP server', { secure: config.ftp.secure });
+      this.log.info('Connected to FTP server');
     } catch (error) {
       const err = error as Error;
-      logger.error('Failed to connect to FTP server', { error: err.message });
+      this.log.error({ error: err.message }, 'Failed to connect to FTP server');
       throw error;
     }
   }
 
   async disconnect(): Promise<void> {
     this.client.close();
-    logger.info('Disconnected from FTP server');
+    this.log.info('Disconnected from FTP server');
   }
 
   async listFiles(remotePath: string): Promise<FtpFile[]> {
@@ -51,7 +54,7 @@ export class FtpClient {
       }));
     } catch (error) {
       const err = error as Error;
-      logger.error('Failed to list files', { remotePath, error: err.message });
+      this.log.error({ remotePath, error: err.message }, 'Failed to list files');
       throw error;
     }
   }
@@ -59,10 +62,10 @@ export class FtpClient {
   async downloadFile(remotePath: string, localPath: string): Promise<void> {
     try {
       await this.client.downloadTo(localPath, remotePath);
-      logger.info('Downloaded file', { remotePath, localPath });
+      this.log.debug({ remotePath, localPath }, 'Downloaded file');
     } catch (error) {
       const err = error as Error;
-      logger.error('Failed to download file', { remotePath, localPath, error: err.message });
+      this.log.error({ remotePath, error: err.message }, 'Failed to download file');
       throw error;
     }
   }
@@ -77,18 +80,18 @@ export class FtpClient {
         const err = error as Error;
         lastError = err;
         const delay = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
-        logger.warn(`Download attempt ${attempt} failed, retrying in ${delay}ms`, { remotePath, error: err.message });
+        this.log.warn(`Download attempt ${attempt} failed, retrying in ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
-    logger.error('Download failed after max retries', { remotePath, maxRetries });
+    this.log.error({ remotePath, maxRetries }, 'Download failed after max retries');
     throw lastError;
   }
 
   async downloadWithCache(remotePath: string, localPath: string): Promise<void> {
     // Use cached file if it exists
     if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
-      logger.info('Using cached file', { remotePath, localPath });
+      this.log.debug(`Using cached file for ${remotePath}`);
       return;
     }
 

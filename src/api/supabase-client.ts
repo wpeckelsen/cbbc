@@ -1,14 +1,17 @@
+import { Logger } from 'pino';
 import { config } from '../config/env';
-import { logger } from '../logger';
+import { logger as defaultLogger } from '../logger';
 import { preflightDropUnknownColumns } from '../db/schema-preflight';
 
 export class SupabaseClient {
   private baseUrl: string;
   private apiKey: string;
+  private log: Logger;
 
-  constructor() {
+  constructor(log: Logger = defaultLogger) {
     this.baseUrl = config.database.supabaseUrl;
     this.apiKey = config.database.supabaseKey;
+    this.log = log;
   }
 
   /**
@@ -85,7 +88,7 @@ export class SupabaseClient {
           supabaseErrorDetails = { raw: err.message };
       }
 
-      logger.error('Supabase request failed', {
+      this.log.error('Supabase request failed', {
         endpoint,
         method,
         // Stringify body for logging, handle cases where body might be undefined or complex
@@ -112,7 +115,7 @@ export class SupabaseClient {
     const boundary = opts?.boundary ?? `supabase.insert:${table}`;
     const preflight = await preflightDropUnknownColumns(table, records, boundary);
     
-    logger.info(`Inserting ${preflight.records.length} records into ${table}`);
+    this.log.debug(`Inserting ${preflight.records.length} records into ${table}`);
     return this.request<T[]>(table, 'POST', preflight.records);
   }
 
@@ -137,7 +140,7 @@ export class SupabaseClient {
     const boundary = opts?.boundary ?? `supabase.upsert:${table}`;
     const preflight = await preflightDropUnknownColumns(table, records, boundary);
 
-    logger.info(`Upserting ${preflight.records.length} records into ${table}`);
+    this.log.debug(`Upserting ${preflight.records.length} records into ${table}`);
     return this.request<T[]>(table, 'POST', preflight.records, params);
   }
 
@@ -215,7 +218,7 @@ export class SupabaseClient {
    * This avoids assuming the presence of an `id` column.
    */
   async deleteAllByNonNullColumn(table: string, nonNullColumn: string): Promise<void> {
-    logger.warn(`Deleting all rows from table: ${table} (where ${nonNullColumn} is not null)`);
+    this.log.warn(`Deleting all rows from table: ${table} (where ${nonNullColumn} is not null)`);
     await this.request(table, 'DELETE', undefined, { [nonNullColumn]: 'not.is.null' });
   }
 
@@ -230,7 +233,7 @@ export class SupabaseClient {
    * Clear all records from a table (use with caution!)
    */
   async truncate(table: string): Promise<void> {
-    logger.warn(`Truncating table: ${table}`);
+    this.log.warn(`Truncating table: ${table}`);
     // Supabase doesn't have a direct truncate, so we delete all with a wildcard.
     // This assumes the table has an `id` column. Prefer deleteAllByNonNullColumn for other tables.
     await this.deleteAllByNonNullColumn(table, 'id');

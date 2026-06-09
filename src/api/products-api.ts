@@ -1,7 +1,22 @@
-import { supabaseClient } from './supabase-client';
+import { Logger } from 'pino';
+import { SupabaseClient, supabaseClient as defaultSupabaseClient } from './supabase-client';
 import { ValidatedProduct } from '../validation/product-validator';
-import { logger } from '../logger';
+import { logger as defaultLogger } from '../logger';
 import { logBoundarySample } from '../utils/pipeline-debug';
+
+// Module-level logger + supabase client, configurable per pipeline run.
+let log: Logger = defaultLogger;
+let supabaseClient: SupabaseClient = defaultSupabaseClient;
+
+/**
+ * Configure module-level logger and (optionally) Supabase client for the
+ * current pipeline run. Call this once at the start of a run; reset is
+ * automatic at process exit or can be done manually.
+ */
+export function configureProductsApi(logger: Logger, client?: SupabaseClient): void {
+  log = logger;
+  if (client) supabaseClient = client;
+}
 
 function toNullableNumber(value: any): number | null {
   if (value === null || value === undefined) return null;
@@ -520,7 +535,7 @@ function toProductsStagingRow(product: Record<string, any>): ProductsStagingRow 
  */
 export async function insertProductsStaging(products: any[]): Promise<void> {
   if (products.length === 0) {
-    logger.info('No products to insert into staging');
+    log.info('No products to insert into staging');
     return;
   }
 
@@ -528,7 +543,7 @@ export async function insertProductsStaging(products: any[]): Promise<void> {
   const batches = Math.ceil(products.length / BATCH_SIZE);
 
   try {
-    logger.info(`Inserting ${products.length} products into staging in ${batches} batches`);
+    log.info(`Inserting ${products.length} products into staging in ${batches} batches`);
     
     for (let i = 0; i < batches; i++) {
       const start = i * BATCH_SIZE;
@@ -537,18 +552,18 @@ export async function insertProductsStaging(products: any[]): Promise<void> {
       
       const transformedBatch = batch.map((p) => toProductsStagingRow(p));
 
-      logBoundarySample('pre-staging:products_staging', transformedBatch as any);
+      logBoundarySample('pre-staging:products_staging', transformedBatch as any, undefined, log);
       
       await supabaseClient.upsert('products_staging', transformedBatch, 'product_code', {
         boundary: 'pipeline.pre-staging.products_staging',
       });
-      logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} products)`);
+      log.info(`Batch ${i + 1}/${batches} complete (${batch.length} products)`);
     }
     
-    logger.info(`Successfully inserted ${products.length} products into staging`);
+    log.info(`Successfully inserted ${products.length} products into staging`);
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to insert products into staging', { error: err.message });
+    log.error('Failed to insert products into staging', { error: err.message });
     throw error;
   }
 }
@@ -570,7 +585,7 @@ export async function clearProductionProductsForDev(): Promise<void> {
  */
 export async function insertPricesStaging(prices: any[]): Promise<void> {
   if (prices.length === 0) {
-    logger.info('No prices to insert into staging');
+    log.info('No prices to insert into staging');
     return;
   }
 
@@ -594,24 +609,24 @@ export async function insertPricesStaging(prices: any[]): Promise<void> {
     }));
 
     const batches = Math.ceil(formattedPrices.length / BATCH_SIZE);
-    logger.info(`Inserting ${formattedPrices.length} prices into staging in ${batches} batches`);
+    log.info(`Inserting ${formattedPrices.length} prices into staging in ${batches} batches`);
     
     for (let i = 0; i < batches; i++) {
       const start = i * BATCH_SIZE;
       const end = Math.min(start + BATCH_SIZE, formattedPrices.length);
       const batch = formattedPrices.slice(start, end);
       
-      logBoundarySample('pre-staging:prices_staging', batch as any);
+      logBoundarySample('pre-staging:prices_staging', batch as any, undefined, log);
       await supabaseClient.upsert('prices_staging', batch, 'product_code', {
         boundary: 'pipeline.pre-staging.prices_staging',
       });
-      logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} prices)`);
+      log.info(`Batch ${i + 1}/${batches} complete (${batch.length} prices)`);
     }
     
-    logger.info(`Successfully inserted ${formattedPrices.length} prices into staging`);
+    log.info(`Successfully inserted ${formattedPrices.length} prices into staging`);
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to insert prices into staging', { error: err.message });
+    log.error('Failed to insert prices into staging', { error: err.message });
     throw error;
   }
 }
@@ -621,7 +636,7 @@ export async function insertPricesStaging(prices: any[]): Promise<void> {
  */
 export async function insertStockStaging(stock: any[], source: string): Promise<void> {
   if (stock.length === 0) {
-    logger.info(`No stock data to insert into staging (source: ${source})`);
+    log.info(`No stock data to insert into staging (source: ${source})`);
     return;
   }
 
@@ -648,24 +663,24 @@ export async function insertStockStaging(stock: any[], source: string): Promise<
     }));
 
     const batches = Math.ceil(formattedStock.length / BATCH_SIZE);
-    logger.info(`Inserting ${formattedStock.length} stock records into staging in ${batches} batches (source: ${source})`);
+    log.info(`Inserting ${formattedStock.length} stock records into staging in ${batches} batches (source: ${source})`);
     
     for (let i = 0; i < batches; i++) {
       const start = i * BATCH_SIZE;
       const end = Math.min(start + BATCH_SIZE, formattedStock.length);
       const batch = formattedStock.slice(start, end);
       
-      logBoundarySample(`pre-staging:stock_staging:${source}`, batch as any);
+      logBoundarySample(`pre-staging:stock_staging:${source}`, batch as any, undefined, log);
       await supabaseClient.insert('stock_staging', batch, {
         boundary: `pipeline.pre-staging.stock_staging:${source}`,
       });
-      logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} stock records)`);
+      log.info(`Batch ${i + 1}/${batches} complete (${batch.length} stock records)`);
     }
     
-    logger.info(`Successfully inserted ${formattedStock.length} stock records into staging (source: ${source})`);
+    log.info(`Successfully inserted ${formattedStock.length} stock records into staging (source: ${source})`);
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to insert stock into staging', { error: err.message, source });
+    log.error('Failed to insert stock into staging', { error: err.message, source });
     throw error;
   }
 }
@@ -675,7 +690,7 @@ export async function insertStockStaging(stock: any[], source: string): Promise<
  */
 export async function insertCategories(categories: any[]): Promise<void> {
   if (categories.length === 0) {
-    logger.info('No categories to insert');
+    log.info('No categories to insert');
     return;
   }
 
@@ -700,15 +715,15 @@ export async function insertCategories(categories: any[]): Promise<void> {
       };
     });
 
-    logger.info(`Deduplicated categories: ${categories.length} -> ${deduped.length} (prefer English, lang 2)`);
-    logBoundarySample('pre-staging:categories', deduped as any);
+    log.info(`Deduplicated categories: ${categories.length} -> ${deduped.length} (prefer English, lang 2)`);
+    logBoundarySample('pre-staging:categories', deduped as any, undefined, log);
     await supabaseClient.upsert('categories', deduped, 'id', {
       boundary: 'pipeline.pre-staging.categories',
     });
-    logger.info(`Inserted ${deduped.length} categories`);
+    log.info(`Inserted ${deduped.length} categories`);
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to insert categories', { error: err.message });
+    log.error('Failed to insert categories', { error: err.message });
     throw error;
   }
 }
@@ -718,7 +733,7 @@ export async function insertCategories(categories: any[]): Promise<void> {
  */
 export async function insertCategoryHierarchy(hierarchy: any[]): Promise<void> {
   if (hierarchy.length === 0) {
-    logger.info('No category hierarchy to insert');
+    log.info('No category hierarchy to insert');
     return;
   }
 
@@ -730,14 +745,14 @@ export async function insertCategoryHierarchy(hierarchy: any[]): Promise<void> {
       category_level: parseInt(h.GROUP_LEVEL) || 0
     }));
     
-    logBoundarySample('pre-staging:category_hierarchy', formattedHierarchy as any);
+    logBoundarySample('pre-staging:category_hierarchy', formattedHierarchy as any, undefined, log);
     await supabaseClient.upsert('category_hierarchy', formattedHierarchy, 'id', {
       boundary: 'pipeline.pre-staging.category_hierarchy',
     });
-    logger.info(`Inserted ${formattedHierarchy.length} category hierarchy records`);
+    log.info(`Inserted ${formattedHierarchy.length} category hierarchy records`);
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to insert category hierarchy', { error: err.message });
+    log.error('Failed to insert category hierarchy', { error: err.message });
     throw error;
   }
 }
@@ -747,7 +762,7 @@ export async function insertCategoryHierarchy(hierarchy: any[]): Promise<void> {
  */
 export async function insertImagesStaging(images: any[]): Promise<void> {
   if (images.length === 0) {
-    logger.info('No images to insert into staging');
+    log.info('No images to insert into staging');
     return;
   }
 
@@ -762,24 +777,24 @@ export async function insertImagesStaging(images: any[]): Promise<void> {
     }));
 
     const batches = Math.ceil(formattedImages.length / BATCH_SIZE);
-    logger.info(`Inserting ${formattedImages.length} images into staging in ${batches} batches`);
+    log.info(`Inserting ${formattedImages.length} images into staging in ${batches} batches`);
     
     for (let i = 0; i < batches; i++) {
       const start = i * BATCH_SIZE;
       const end = Math.min(start + BATCH_SIZE, formattedImages.length);
       const batch = formattedImages.slice(start, end);
       
-      logBoundarySample('pre-staging:images_staging', batch as any);
+      logBoundarySample('pre-staging:images_staging', batch as any, undefined, log);
       await supabaseClient.insert('images_staging', batch, {
         boundary: 'pipeline.pre-staging.images_staging',
       });
-      logger.info(`Batch ${i + 1}/${batches} complete (${batch.length} images)`);
+      log.info(`Batch ${i + 1}/${batches} complete (${batch.length} images)`);
     }
     
-    logger.info(`Successfully inserted ${formattedImages.length} images into staging`);
+    log.info(`Successfully inserted ${formattedImages.length} images into staging`);
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to insert images into staging', { error: err.message });
+    log.error('Failed to insert images into staging', { error: err.message });
     throw error;
   }
 }
@@ -794,7 +809,7 @@ export async function promoteToProduction(
   }
 ): Promise<void> {
   if (validatedProducts.length === 0) {
-    logger.info('No products to promote to production');
+    log.info('No products to promote to production');
     return;
   }
 
@@ -819,7 +834,7 @@ export async function promoteToProduction(
           return acc;
         }, {} as Record<string, number>);
 
-      logger.warn(
+      log.warn(
         {
           rejected: rejected.length,
           accepted: accepted.length,
@@ -830,7 +845,7 @@ export async function promoteToProduction(
     }
 
     if (accepted.length === 0) {
-      logger.info('No valid variants to promote to production');
+      log.info('No valid variants to promote to production');
       return;
     }
 
@@ -876,7 +891,7 @@ export async function promoteToProduction(
     }
 
     if (variantsToPromote.length === 0) {
-      logger.info('No variants with required fields to promote to production');
+      log.info('No variants with required fields to promote to production');
       return;
     }
 
@@ -946,15 +961,15 @@ export async function promoteToProduction(
     const filteredVariantsToPromote = variantsToPromote.filter((v) => promotedModelCodes.has(v.model_code));
 
     if (filteredVariantsToPromote.length === 0) {
-      logger.info('No variants left to promote after filtering by promotable models');
+      log.info('No variants left to promote after filtering by promotable models');
       return;
     }
 
-    logBoundarySample('pre-prod:product_models', modelsToPromote as any);
-    logBoundarySample('pre-prod:product_variants', filteredVariantsToPromote as any);
+    logBoundarySample('pre-prod:product_models', modelsToPromote as any, undefined, log);
+    logBoundarySample('pre-prod:product_variants', filteredVariantsToPromote as any, undefined, log);
 
     const modelBatches = Math.ceil(modelsToPromote.length / BATCH_SIZE);
-    logger.info(`Promoting ${modelsToPromote.length} product models to production in ${modelBatches} batches`);
+    log.info(`Promoting ${modelsToPromote.length} product models to production in ${modelBatches} batches`);
     for (let i = 0; i < modelBatches; i++) {
       const start = i * BATCH_SIZE;
       const end = Math.min(start + BATCH_SIZE, modelsToPromote.length);
@@ -962,11 +977,11 @@ export async function promoteToProduction(
       await supabaseClient.upsert('product_models', batch, 'model_code', {
         boundary: 'pipeline.pre-prod.product_models',
       });
-      logger.info(`Batch ${i + 1}/${modelBatches} complete (${batch.length} product models)`);
+      log.info(`Batch ${i + 1}/${modelBatches} complete (${batch.length} product models)`);
     }
 
     const variantBatches = Math.ceil(filteredVariantsToPromote.length / BATCH_SIZE);
-    logger.info(`Promoting ${filteredVariantsToPromote.length} product variants to production in ${variantBatches} batches`);
+    log.info(`Promoting ${filteredVariantsToPromote.length} product variants to production in ${variantBatches} batches`);
     for (let i = 0; i < variantBatches; i++) {
       const start = i * BATCH_SIZE;
       const end = Math.min(start + BATCH_SIZE, filteredVariantsToPromote.length);
@@ -974,16 +989,16 @@ export async function promoteToProduction(
       await supabaseClient.upsert('product_variants', batch, 'product_code', {
         boundary: 'pipeline.pre-prod.product_variants',
       });
-      logger.info(`Batch ${i + 1}/${variantBatches} complete (${batch.length} product variants)`);
+      log.info(`Batch ${i + 1}/${variantBatches} complete (${batch.length} product variants)`);
     }
 
-    logger.info('Successfully promoted models + variants to production', {
+    log.info('Successfully promoted models + variants to production', {
       models: modelsToPromote.length,
       variants: filteredVariantsToPromote.length,
     });
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to promote models + variants to production', { error: err.message });
+    log.error('Failed to promote models + variants to production', { error: err.message });
     throw error;
   }
 }
@@ -1090,7 +1105,7 @@ export async function getPromotedModelsWithVariants(): Promise<ModelWithVariants
     out.push({ model, variants: modelVariants });
   }
 
-  logger.info('Loaded promoted catalogue for store sync', {
+  log.info('Loaded promoted catalogue for store sync', {
     models: out.length,
     variants: variants.length,
   });
@@ -1130,7 +1145,7 @@ export async function upsertStoreProductLink(link: {
     );
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to upsert store product link', { error: err.message, modelCode: link.model_code });
+    log.error('Failed to upsert store product link', { error: err.message, modelCode: link.model_code });
     throw error;
   }
 }
@@ -1161,7 +1176,7 @@ export async function upsertStoreVariantLink(link: {
     );
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to upsert store variant link', { error: err.message, productCode: link.product_code });
+    log.error('Failed to upsert store variant link', { error: err.message, productCode: link.product_code });
     throw error;
   }
 }
@@ -1176,7 +1191,7 @@ export async function deleteStoreProductLink(modelCode: string): Promise<void> {
     await supabaseClient.delete('store_product_links', { model_code: modelCode });
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to delete store product link', { error: err.message, modelCode });
+    log.error('Failed to delete store product link', { error: err.message, modelCode });
     throw error;
   }
 }
@@ -1193,7 +1208,7 @@ export async function updateModelSyncStatus(modelCode: string, lastSyncedAt: Dat
     );
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to update model sync status', { error: err.message, modelCode });
+    log.error('Failed to update model sync status', { error: err.message, modelCode });
     // Non-fatal: bookkeeping only.
   }
 }
@@ -1228,7 +1243,7 @@ export async function logStoreSync(entry: {
     );
   } catch (error) {
     const err = error as Error;
-    logger.error('Failed to log store sync', { error: err.message, localCode: entry.local_code });
+    log.error('Failed to log store sync', { error: err.message, localCode: entry.local_code });
     // Don't throw.
   }
 }
