@@ -6,21 +6,26 @@ import {
   configureProductsApi,
   getPromotedModelsWithVariants,
   getAllStoreProductLinks,
+  getAllStoreVariantLinks,
   upsertStoreProductLink,
   upsertStoreVariantLink,
   deleteStoreProductLink,
   updateModelSyncStatus,
   logStoreSync,
   ModelWithVariants,
+  StoreProductLink,
 } from '../api/products-api';
 import { ShopifyClient, shopifyClient as defaultShopifyClient, InventoryQuantity } from './shopify-client';
 import { SupabaseClient } from '../api/supabase-client';
 import { buildProductSetInput, handleForModel } from './mappers';
 import { RunContext } from '../logging';
 import { checkDrift } from '../db/drift-check';
+import { computeContentHashes, ContentHashes } from './content-hash';
 
 type PushSummary = {
   upserted: number;
+  inventoryOnly: number;
+  skipped: number;
   variantsSynced: number;
   deleted: number;
   failed: number;
@@ -51,7 +56,10 @@ export async function runShopifyPush(): Promise<PushSummary> {
   const supabase = new SupabaseClient(log);
   configureProductsApi(log, supabase);
 
-  const summary: PushSummary = { upserted: 0, variantsSynced: 0, deleted: 0, failed: 0 };
+  const forcePush = config.shopify.forcePush;
+  if (forcePush) log.warn('SHOPIFY_FORCE_PUSH is enabled — all models will be pushed regardless of content hash');
+
+  const summary: PushSummary = { upserted: 0, inventoryOnly: 0, skipped: 0, variantsSynced: 0, deleted: 0, failed: 0 };
 
   try {
     // Pre-run: DB drift check
@@ -70,17 +78,37 @@ export async function runShopifyPush(): Promise<PushSummary> {
 
     log.info(`Starting Shopify push (${entries.length} promoted models, ${existingLinks.length} existing links)`);
 
-    // --- Upserts ---
+    // --- Upserts (with content-hash skip-if-unchanged) ---
     for (const entry of entries) {
+      const modelCode = entry.model.model_code;
+      const link = linkByModel.get(modelCode);
+      const hashes = computeContentHashes(entry);
+
       try {
-        await upsertModel(entry, linkByModel.get(entry.model.model_code)?.external_product_id ?? null, locationId, summary, shopify, log);
+        if (!forcePush && link) {
+          const productUnchanged = link.last_pushed_product_hash === hashes.productHash;
+          const stockUnchanged = link.last_pushed_stock_hash === hashes.stockHash;
+
+          if (productUnchanged && stockUnchanged) {
+            log.debug(`Skipping ${modelCode} (product+stock unchanged)`);
+            summary.skipped++;
+            continue;
+          }
+
+          if (productUnchanged && !stockUnchanged) {
+            await syncInventoryOnly(entry, link, locationId, hashes, summary, shopify, log);
+            continue;
+          }
+        }
+
+        await upsertModel(entry, link?.external_product_id ?? null, locationId, hashes, summary, shopify, log);
       } catch (error) {
         summary.failed++;
         const err = error as Error;
-        log.error(`Failed to upsert model ${entry.model.model_code} to Shopify (${err.message})`);
+        log.error(`Failed to sync model ${modelCode} to Shopify (${err.message})`);
         await logStoreSync({
           scope: 'product',
-          local_code: entry.model.model_code,
+          local_code: modelCode,
           action: 'update',
           status: 'failed',
           message: err.message,
@@ -117,10 +145,19 @@ export async function runShopifyPush(): Promise<PushSummary> {
       }
     }
 
-    log.info(`Shopify push complete (upserted: ${summary.upserted}, variants: ${summary.variantsSynced}, deleted: ${summary.deleted}, failed: ${summary.failed})`);
+    log.info(
+      `Shopify push complete (upserted: ${summary.upserted}, inventory-only: ${summary.inventoryOnly}, skipped: ${summary.skipped}, variants: ${summary.variantsSynced}, deleted: ${summary.deleted}, failed: ${summary.failed})`,
+    );
 
     await run.finish('success', {
-      summary: { upserted: summary.upserted, variantsSynced: summary.variantsSynced, deleted: summary.deleted, failed: summary.failed },
+      summary: {
+        upserted: summary.upserted,
+        inventoryOnly: summary.inventoryOnly,
+        skipped: summary.skipped,
+        variantsSynced: summary.variantsSynced,
+        deleted: summary.deleted,
+        failed: summary.failed,
+      },
     });
   } catch (error) {
     const err = error as Error;
@@ -132,10 +169,76 @@ export async function runShopifyPush(): Promise<PushSummary> {
   return summary;
 }
 
+/**
+ * Inventory-only fast path: when only stock levels changed (product hash
+ * matches), skip the expensive productSet mutation and only write inventory.
+ */
+async function syncInventoryOnly(
+  entry: ModelWithVariants,
+  link: StoreProductLink,
+  locationId: string,
+  hashes: ContentHashes,
+  summary: PushSummary,
+  shopify: ShopifyClient,
+  log: Logger,
+): Promise<void> {
+  const modelCode = entry.model.model_code;
+  log.info(`Inventory-only update for ${modelCode} (product unchanged, stock changed)`);
+
+  // Re-use the existing store_variant_links to map product_codes -> inventoryItemIds
+  // rather than calling Shopify.
+  const variantLinks = await getAllStoreVariantLinks(modelCode);
+  const inventoryItemByCode = new Map(
+    variantLinks
+      .filter((vl) => vl.external_inventory_item_id)
+      .map((vl) => [vl.product_code, vl.external_inventory_item_id!]),
+  );
+
+  const inventoryUpdates: InventoryQuantity[] = [];
+  for (const v of entry.variants) {
+    const inventoryItemId = inventoryItemByCode.get(v.product_code);
+    if (!inventoryItemId) {
+      log.warn(`No inventory item id for SKU ${v.product_code} (model ${modelCode}) — falling back to full upsert`);
+      await upsertModel(entry, link.external_product_id, locationId, hashes, summary, shopify, log);
+      return;
+    }
+    inventoryUpdates.push({
+      inventoryItemId,
+      locationId,
+      quantity: Math.max(0, Math.trunc(v.stock_total)),
+    });
+  }
+
+  await shopify.setInventoryQuantities(inventoryUpdates);
+
+  // Update only the stock hash; product hash stays the same.
+  await upsertStoreProductLink({
+    model_code: modelCode,
+    external_product_id: link.external_product_id,
+    external_handle: link.external_handle,
+    last_pushed_product_hash: hashes.productHash,
+    last_pushed_stock_hash: hashes.stockHash,
+  });
+
+  await updateModelSyncStatus(modelCode, new Date());
+  summary.inventoryOnly++;
+  summary.variantsSynced += entry.variants.length;
+
+  await logStoreSync({
+    scope: 'product',
+    local_code: modelCode,
+    external_id: link.external_product_id,
+    action: 'update',
+    status: 'success',
+    message: 'inventory-only',
+  });
+}
+
 async function upsertModel(
   entry: ModelWithVariants,
   knownProductId: string | null,
   locationId: string,
+  hashes: ContentHashes,
   summary: PushSummary,
   shopify: ShopifyClient,
   log: Logger,
@@ -152,6 +255,8 @@ async function upsertModel(
     model_code: modelCode,
     external_product_id: result.productId,
     external_handle: result.handle,
+    last_pushed_product_hash: hashes.productHash,
+    last_pushed_stock_hash: hashes.stockHash,
   });
 
   // Match returned Shopify variants back to our variants by SKU to capture ids

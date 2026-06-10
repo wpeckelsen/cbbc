@@ -1049,6 +1049,8 @@ export type StoreProductLink = {
   external_product_id: string;
   external_handle: string | null;
   last_synced_at: string | null;
+  last_pushed_product_hash: string | null;
+  last_pushed_stock_hash: string | null;
 };
 
 const STORE_PAGE_SIZE = 1000;
@@ -1128,6 +1130,8 @@ export async function upsertStoreProductLink(link: {
   model_code: string;
   external_product_id: string;
   external_handle?: string | null;
+  last_pushed_product_hash?: string | null;
+  last_pushed_stock_hash?: string | null;
 }): Promise<void> {
   try {
     await supabaseClient.upsert(
@@ -1137,6 +1141,8 @@ export async function upsertStoreProductLink(link: {
           model_code: link.model_code,
           external_product_id: link.external_product_id,
           external_handle: link.external_handle ?? null,
+          last_pushed_product_hash: link.last_pushed_product_hash ?? null,
+          last_pushed_stock_hash: link.last_pushed_stock_hash ?? null,
           last_synced_at: new Date().toISOString(),
         },
       ],
@@ -1194,6 +1200,23 @@ export async function deleteStoreProductLink(modelCode: string): Promise<void> {
     log.error('Failed to delete store product link', { error: err.message, modelCode });
     throw error;
   }
+}
+
+export type StoreVariantLink = {
+  product_code: string;
+  model_code: string;
+  external_variant_id: string;
+  external_inventory_item_id: string | null;
+  last_synced_at: string | null;
+};
+
+/**
+ * Read all variant links for a given model. Used by the inventory-only fast
+ * path to map product_codes to Shopify inventory item ids without calling
+ * the Shopify API.
+ */
+export async function getAllStoreVariantLinks(modelCode: string): Promise<StoreVariantLink[]> {
+  return supabaseClient.select<StoreVariantLink>('store_variant_links', '*', { model_code: modelCode });
 }
 
 /**

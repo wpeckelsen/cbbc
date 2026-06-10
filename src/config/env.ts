@@ -37,6 +37,9 @@ export const config = {
     locationId: process.env.SHOPIFY_LOCATION_ID || '',
     // Optional cron for the weekly push (e.g. '0 3 * * 1' = Mon 03:00). Empty = disabled (manual only).
     pushCron: process.env.SHOPIFY_PUSH_CRON || '',
+    // Force-push all models regardless of content hash. Useful for first deploy,
+    // recovery, or manual "just push everything" runs.
+    forcePush: parseBooleanEnv(process.env.SHOPIFY_FORCE_PUSH, false),
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',
