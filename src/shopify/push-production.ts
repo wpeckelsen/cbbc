@@ -262,10 +262,24 @@ async function upsertModel(
   const modelCode = entry.model.model_code;
   const handle = handleForModel(modelCode);
 
-  const existingId = knownProductId ?? (await shopify.findProductIdByHandle(handle));
+  let existingId = knownProductId ?? (await shopify.findProductIdByHandle(handle));
 
-  const input = buildProductSetInput(entry, existingId);
-  const result = await shopify.productSet(input);
+  let input = buildProductSetInput(entry, existingId);
+  let result: Awaited<ReturnType<ShopifyClient['productSet']>>;
+
+  try {
+    result = await shopify.productSet(input);
+  } catch (err) {
+    const msg = (err as Error).message ?? '';
+    if (existingId && msg.includes('Product does not exist')) {
+      log.warn(`Stale product link for ${modelCode} (${existingId}) — retrying as create`);
+      existingId = null;
+      input = buildProductSetInput(entry, null);
+      result = await shopify.productSet(input);
+    } else {
+      throw err;
+    }
+  }
 
   await upsertStoreProductLink({
     model_code: modelCode,
