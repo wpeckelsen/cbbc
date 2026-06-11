@@ -20,6 +20,8 @@ import { ModelWithVariants, ProductionModel, ProductionVariant } from '../api/pr
 export const METAFIELD_NAMESPACE = 'cbbc';
 export const METAFIELD_MODEL_CODE_KEY = 'model_code';
 export const VARIANT_OPTION_NAME = 'Name';
+const DEFAULT_OPTION_NAME = 'Title';
+const DEFAULT_OPTION_VALUE = 'Default Title';
 
 export function handleForModel(modelCode: string): string {
   // Shopify handles are lowercased, alphanumeric + hyphens.
@@ -82,6 +84,8 @@ export function buildProductSetInput(
 
     if (isMultiVariant) {
       variant.optionValues = [{ optionName: VARIANT_OPTION_NAME, name: optionValueByCode.get(v.product_code)! }];
+    } else {
+      variant.optionValues = [{ optionName: DEFAULT_OPTION_NAME, name: DEFAULT_OPTION_VALUE }];
     }
 
     if (v.image_url) {
@@ -114,6 +118,10 @@ export function buildProductSetInput(
         name: VARIANT_OPTION_NAME,
         values: variants.map((v) => ({ name: optionValueByCode.get(v.product_code)! })),
       },
+    ];
+  } else {
+    input.productOptions = [
+      { name: DEFAULT_OPTION_NAME, values: [{ name: DEFAULT_OPTION_VALUE }] },
     ];
   }
 
