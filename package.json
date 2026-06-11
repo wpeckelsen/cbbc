@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/worker.js",
     "dev": "ts-node-dev --respawn --transpile-only src/worker.ts",
+    "shopify:auth": "ts-node src/shopify/auth.ts",
     "shopify:push:prod": "ts-node src/shopify/push-production.ts",
     "db:status": "ts-node src/db/status.ts",
     "db:migrate": "ts-node src/db/migrate.ts",

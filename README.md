@@ -89,10 +89,29 @@ correct, configure your Shopify store so that prices **do not** include tax
 
 ### Required configuration
 
-See `.env.example`. The Shopify push needs `SHOPIFY_STORE_DOMAIN`,
-`SHOPIFY_ADMIN_ACCESS_TOKEN`, and `SHOPIFY_API_VERSION` (optionally
-`SHOPIFY_LOCATION_ID` and `SHOPIFY_PUSH_CRON`). Create a Shopify custom app with
-`read_products`, `write_products`, `read_inventory`, and `write_inventory` scopes.
+See `.env.example`. Create a Shopify custom app (Settings → Apps → Develop apps)
+with scopes: `read_products`, `write_products`, `read_inventory`,
+`write_inventory`.
+
+Set in `.env`:
+
+```env
+SHOPIFY_STORE_DOMAIN=your-store.myshopify.com
+SHOPIFY_CLIENT_ID=...
+SHOPIFY_SECRET=...
+SHOPIFY_API_VERSION=2024-10
+```
+
+Then run the one-time OAuth authorization:
+
+```bash
+npm run shopify:auth
+```
+
+This opens a browser URL, you authorize the app, and the access token is saved
+to `.env` automatically. After that, `npm run shopify:push:prod` works.
+
+Optionally set `SHOPIFY_LOCATION_ID` and `SHOPIFY_PUSH_CRON`.
 
 ## Where to learn more (technical)
 

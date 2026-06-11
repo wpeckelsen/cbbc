@@ -44,8 +44,16 @@ type PushSummary = {
  * Shopify client is throttle-aware, so large runs pace themselves.
  */
 export async function runShopifyPush(): Promise<PushSummary> {
-  if (!config.shopify.storeDomain || !config.shopify.adminAccessToken) {
-    throw new Error('Shopify is not configured (set SHOPIFY_STORE_DOMAIN and SHOPIFY_ADMIN_ACCESS_TOKEN)');
+  if (!config.shopify.storeDomain) {
+    throw new Error('Shopify is not configured (set SHOPIFY_STORE_DOMAIN)');
+  }
+  if (!config.shopify.adminAccessToken) {
+    if (config.shopify.clientId && config.shopify.secret) {
+      throw new Error(
+        'SHOPIFY_ADMIN_ACCESS_TOKEN is not set. Run `npm run shopify:auth` to authorize via OAuth.',
+      );
+    }
+    throw new Error('Shopify is not configured (set SHOPIFY_ADMIN_ACCESS_TOKEN, or SHOPIFY_CLIENT_ID + SHOPIFY_SECRET and run `npm run shopify:auth`)');
   }
 
   const run = new RunContext('shopify-push');
