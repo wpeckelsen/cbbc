@@ -35,8 +35,8 @@ export function handleForModel(modelCode: string): string {
 }
 
 function priceString(variant: ProductionVariant): string {
-  // Shopify expects price as a decimal string.
-  return Number(variant.price_eur_excl_vat).toFixed(2);
+  // Shopify store sells in DKK — use the pre-converted DKK price.
+  return Number(variant.price_dkk_excl_vat).toFixed(2);
 }
 
 function distinct<T>(items: T[]): T[] {

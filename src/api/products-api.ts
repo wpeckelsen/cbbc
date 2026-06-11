@@ -4,6 +4,9 @@ import { ValidatedProduct } from '../validation/product-validator';
 import { logger as defaultLogger } from '../logger';
 import { logBoundarySample } from '../utils/pipeline-debug';
 
+/** Fixed EUR → DKK conversion rate. */
+const EUR_TO_DKK = 7.47417;
+
 // Module-level logger + supabase client, configurable per pipeline run.
 let log: Logger = defaultLogger;
 let supabaseClient: SupabaseClient = defaultSupabaseClient;
@@ -62,6 +65,7 @@ type ProductVariantRow = {
   barcode: string;
   price_eur_excl_vat: number;
   price_eur_incl_vat: number;
+  price_dkk_excl_vat: number;
   stock_total: number;
   stock_vaasa: number | null;
   stock_sweden: number | null;
@@ -875,6 +879,8 @@ export async function promoteToProduction(
         continue;
       }
 
+      const priceDkkExcl = Math.round(priceExcl * EUR_TO_DKK * 100) / 100;
+
       variantsToPromote.push({
         product_code: v.product_code,
         model_code: modelCode,
@@ -882,6 +888,7 @@ export async function promoteToProduction(
         barcode: v.barcode,
         price_eur_excl_vat: priceExcl,
         price_eur_incl_vat: priceIncl,
+        price_dkk_excl_vat: priceDkkExcl,
         stock_total: stockTotal,
         stock_vaasa: typeof v.stock_vaasa === 'number' ? v.stock_vaasa : null,
         stock_sweden: typeof v.stock_sweden === 'number' ? v.stock_sweden : null,
@@ -1031,6 +1038,7 @@ export type ProductionVariant = {
   barcode: string;
   price_eur_excl_vat: number;
   price_eur_incl_vat: number;
+  price_dkk_excl_vat: number;
   stock_total: number;
   stock_vaasa: number | null;
   stock_sweden: number | null;
