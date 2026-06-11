@@ -83,8 +83,9 @@ for Monday 03:00); it is disabled by default.
 
 ### Pricing / VAT note
 
-Variant prices are pushed **excluding VAT** (`price_eur_excl_vat`). For totals to be
-correct, configure your Shopify store so that prices **do not** include tax
+Variant prices are converted from EUR to **Danish Kroner** (1 EUR = 7.47417 DKK)
+during promotion and pushed **excluding VAT** (`price_dkk_excl_vat`). For totals
+to be correct, configure your Shopify store so that prices **do not** include tax
 ("Settings → Taxes and duties") and let Shopify add VAT at checkout.
 
 ### Required configuration
