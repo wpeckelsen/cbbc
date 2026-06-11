@@ -81,13 +81,21 @@ export async function runShopifyPush(): Promise<PushSummary> {
       getAllStoreProductLinks(),
     ]);
 
+    const MVP_MODEL_LIMIT = 50;
+    const cappedEntries = entries.slice(0, MVP_MODEL_LIMIT);
+    if (entries.length > MVP_MODEL_LIMIT) {
+      log.warn(`Promoted catalogue has ${entries.length} models — capping Shopify push to ${MVP_MODEL_LIMIT}`);
+    }
+
     const linkByModel = new Map(existingLinks.map((l) => [l.model_code, l]));
+    // Deletion uses ALL promoted models (not capped) — a model beyond the cap
+    // should not be deleted just because it's past the limit.
     const currentModelCodes = new Set(entries.map((e) => e.model.model_code));
 
-    log.info(`Starting Shopify push (${entries.length} promoted models, ${existingLinks.length} existing links)`);
+    log.info(`Starting Shopify push (${cappedEntries.length} models, ${existingLinks.length} existing links)`);
 
     // --- Upserts (with content-hash skip-if-unchanged) ---
-    for (const entry of entries) {
+    for (const entry of cappedEntries) {
       const modelCode = entry.model.model_code;
       const link = linkByModel.get(modelCode);
       const hashes = computeContentHashes(entry);
