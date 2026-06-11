@@ -31,6 +31,8 @@ export const config = {
   },
   shopify: {
     storeDomain: process.env.SHOPIFY_STORE_DOMAIN || '',
+    clientId: process.env.SHOPIFY_CLIENT_ID || '',
+    secret: process.env.SHOPIFY_SECRET || '',
     adminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || '',
     apiVersion: process.env.SHOPIFY_API_VERSION || '2024-10',
     // Optional: explicit inventory location. Falls back to the store's primary location when empty.

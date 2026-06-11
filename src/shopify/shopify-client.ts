@@ -48,7 +48,15 @@ export class ShopifyClient {
 
   private assertConfigured(): void {
     if (!this.storeDomain) throw new ShopifyError('Missing SHOPIFY_STORE_DOMAIN');
-    if (!this.accessToken) throw new ShopifyError('Missing SHOPIFY_ADMIN_ACCESS_TOKEN');
+    if (!this.accessToken) {
+      if (config.shopify.clientId && config.shopify.secret) {
+        throw new ShopifyError(
+          'SHOPIFY_ADMIN_ACCESS_TOKEN is not set. ' +
+          'Run `npm run shopify:auth` to authorize via OAuth and obtain one.',
+        );
+      }
+      throw new ShopifyError('Missing SHOPIFY_ADMIN_ACCESS_TOKEN');
+    }
   }
 
   private get endpoint(): string {
