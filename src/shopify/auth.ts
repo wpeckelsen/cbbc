@@ -21,10 +21,12 @@ import { config } from '../config/env';
  */
 
 const REQUIRED_SCOPES = [
+  'write_inventory',
+  'read_inventory',
+  'write_locations',
+  'read_locations',
   'read_products',
   'write_products',
-  'read_inventory',
-  'write_inventory',
 ].join(',');
 
 const CALLBACK_PORT = 3456;
