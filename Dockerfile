@@ -1,24 +1,24 @@
-# Use Node.js 20 Alpine for lightweight container
-FROM node:20-alpine
+# --- Build stage ---
+FROM node:20-alpine AS build
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy source code
 COPY src/ ./src/
 COPY tsconfig.json ./
 
-# Build TypeScript
 RUN npm run build
 
-# Expose no ports (worker process)
-EXPOSE
+# --- Production stage ---
+FROM node:20-alpine
 
-# Run the worker
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+COPY --from=build /app/dist ./dist
+
 CMD ["node", "dist/worker.js"]

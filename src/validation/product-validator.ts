@@ -81,15 +81,6 @@ export class ProductValidator {
 
     // Catalog restriction: optional (no strict semantics yet)
 
-    // Check for SQL injection in text fields (basic check)
-    const textFields = ['product_name_en', 'product_name_fi', 'product_name_sv', 'brand', 'vendor_name', 'short_description_en', 'long_description_en'];
-    for (const field of textFields) {
-      const value = record[field];
-      if (value && (value.includes(';') || value.includes('--') || value.toLowerCase().includes('drop') || value.toLowerCase().includes('select'))) {
-        errors.push({ field, value, reason: 'Potential SQL injection detected' });
-      }
-    }
-
     return { isValid: errors.length === 0, errors };
   }
 

@@ -81,10 +81,10 @@ export async function runShopifyPush(): Promise<PushSummary> {
       getAllStoreProductLinks(),
     ]);
 
-    const MVP_MODEL_LIMIT = 50;
-    const cappedEntries = entries.slice(0, MVP_MODEL_LIMIT);
-    if (entries.length > MVP_MODEL_LIMIT) {
-      log.warn(`Promoted catalogue has ${entries.length} models — capping Shopify push to ${MVP_MODEL_LIMIT}`);
+    const pushLimit = config.shopify.pushModelLimit;
+    const cappedEntries = pushLimit > 0 ? entries.slice(0, pushLimit) : entries;
+    if (pushLimit > 0 && entries.length > pushLimit) {
+      log.warn(`Promoted catalogue has ${entries.length} models — capping Shopify push to ${pushLimit}`);
     }
 
     const linkByModel = new Map(existingLinks.map((l) => [l.model_code, l]));
