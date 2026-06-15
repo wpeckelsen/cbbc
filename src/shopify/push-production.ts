@@ -29,6 +29,7 @@ type PushSummary = {
   variantsSynced: number;
   deleted: number;
   failed: number;
+  repaired: number;
 };
 
 /**
@@ -67,7 +68,7 @@ export async function runShopifyPush(): Promise<PushSummary> {
   const forcePush = config.shopify.forcePush;
   if (forcePush) log.warn('SHOPIFY_FORCE_PUSH is enabled — all models will be pushed regardless of content hash');
 
-  const summary: PushSummary = { upserted: 0, inventoryOnly: 0, skipped: 0, variantsSynced: 0, deleted: 0, failed: 0 };
+  const summary: PushSummary = { upserted: 0, inventoryOnly: 0, skipped: 0, variantsSynced: 0, deleted: 0, failed: 0, repaired: 0 };
 
   try {
     // Pre-run: DB drift check
@@ -91,6 +92,28 @@ export async function runShopifyPush(): Promise<PushSummary> {
     // Deletion uses ALL promoted models (not capped) — a model beyond the cap
     // should not be deleted just because it's past the limit.
     const currentModelCodes = new Set(entries.map((e) => e.model.model_code));
+
+    // --- Ghost detection: find products deleted directly in Shopify ---
+    const linkedProductIds = existingLinks.map((l) => l.external_product_id);
+    const aliveIds = await shopify.checkProductsExist(linkedProductIds);
+    for (const link of existingLinks) {
+      if (aliveIds.has(link.external_product_id)) continue;
+      log.warn(`Ghost detected: ${link.model_code} (${link.external_product_id}) no longer exists in Shopify — clearing link for re-push`);
+      await deleteStoreProductLink(link.model_code);
+      linkByModel.delete(link.model_code);
+      summary.repaired++;
+      await logStoreSync({
+        scope: 'product',
+        local_code: link.model_code,
+        external_id: link.external_product_id,
+        action: 'delete',
+        status: 'success',
+        message: 'ghost-repair (externally deleted)',
+      });
+    }
+    if (summary.repaired > 0) {
+      log.info(`Cleared ${summary.repaired} ghost link(s) — affected models will be re-created`);
+    }
 
     log.info(`Starting Shopify push (${cappedEntries.length} models, ${existingLinks.length} existing links)`);
 
@@ -162,7 +185,7 @@ export async function runShopifyPush(): Promise<PushSummary> {
     }
 
     log.info(
-      `Shopify push complete (upserted: ${summary.upserted}, inventory-only: ${summary.inventoryOnly}, skipped: ${summary.skipped}, variants: ${summary.variantsSynced}, deleted: ${summary.deleted}, failed: ${summary.failed})`,
+      `Shopify push complete (upserted: ${summary.upserted}, inventory-only: ${summary.inventoryOnly}, skipped: ${summary.skipped}, variants: ${summary.variantsSynced}, deleted: ${summary.deleted}, repaired: ${summary.repaired}, failed: ${summary.failed})`,
     );
 
     await run.finish('success', {
@@ -172,6 +195,7 @@ export async function runShopifyPush(): Promise<PushSummary> {
         skipped: summary.skipped,
         variantsSynced: summary.variantsSynced,
         deleted: summary.deleted,
+        repaired: summary.repaired,
         failed: summary.failed,
       },
     });
