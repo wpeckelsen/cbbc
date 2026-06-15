@@ -258,6 +258,34 @@ export class ShopifyClient {
   }
 
   /**
+   * Batch-check which product GIDs still exist in Shopify.
+   * Returns the subset of `productIds` that are live.
+   */
+  async checkProductsExist(productIds: string[]): Promise<Set<string>> {
+    if (productIds.length === 0) return new Set();
+
+    const BATCH = 250; // Shopify nodes query limit
+    const alive = new Set<string>();
+
+    for (let i = 0; i < productIds.length; i += BATCH) {
+      const batch = productIds.slice(i, i + BATCH);
+      const data = await this.graphql<{
+        nodes: Array<{ id: string } | null>;
+      }>(
+        `query ($ids: [ID!]!) {
+          nodes(ids: $ids) { ... on Product { id } }
+        }`,
+        { ids: batch },
+      );
+      for (const node of data.nodes) {
+        if (node?.id) alive.add(node.id);
+      }
+    }
+
+    return alive;
+  }
+
+  /**
    * Delete a product from the storefront.
    */
   async deleteProduct(productId: string): Promise<void> {
