@@ -101,8 +101,14 @@ async function runPipeline(): Promise<void> {
     // Step 1: Connect to FTP
     await ftpClient.connect();
 
-    // Use cache directory for downloads (persists across runs)
+    // Cache directory for FTP downloads
     const cacheDir = path.join(__dirname, '../../cache/ftp');
+
+    // In prod, clear cache each run to ensure fresh supplier data
+    if (!config.ftp.useCache && fs.existsSync(cacheDir)) {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+      log.info('Cleared FTP cache (prod mode)');
+    }
     if (!fs.existsSync(cacheDir)) {
       fs.mkdirSync(cacheDir, { recursive: true });
     }
@@ -320,8 +326,10 @@ async function runPipeline(): Promise<void> {
       return eligibleModelSet.has(modelCode);
     });
 
-    const MVP_MODEL_LIMIT = 50;
-    const cappedModelCodes = eligibleModelOrder.slice(0, MVP_MODEL_LIMIT);
+    const modelLimit = config.pipelineModelLimit;
+    const cappedModelCodes = modelLimit > 0
+      ? eligibleModelOrder.slice(0, modelLimit)
+      : eligibleModelOrder;
     const cappedModelCodeSet = new Set<string>(cappedModelCodes);
     const cappedVariantsToPromote = variantsToPromote.filter((v) => {
       const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
@@ -330,7 +338,11 @@ async function runPipeline(): Promise<void> {
 
     pipelineModels = cappedModelCodes.length;
     pipelineVariants = cappedVariantsToPromote.length;
-    log.info(`Applied hard cap: ${pipelineModels} models, ${pipelineVariants} variants (limit: ${MVP_MODEL_LIMIT})`);
+    if (modelLimit > 0) {
+      log.info(`Applied model cap: ${pipelineModels} models, ${pipelineVariants} variants (limit: ${modelLimit})`);
+    } else {
+      log.info(`No model cap (prod): ${pipelineModels} models, ${pipelineVariants} variants`);
+    }
 
     // Step 9: Filter related data to match only the selected variant SKUs
     const cappedProductCodes = new Set(cappedVariantsToPromote.map((v) => v.product_code));

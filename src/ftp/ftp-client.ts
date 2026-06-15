@@ -17,7 +17,7 @@ export class FtpClient {
 
   constructor(log: Logger = defaultLogger) {
     this.client = new Client();
-    this.client.ftp.verbose = config.nodeEnv === 'development';
+    this.client.ftp.verbose = config.ftp.verbose;
     this.log = log;
   }
 
@@ -28,8 +28,8 @@ export class FtpClient {
         port: config.ftp.port,
         user: config.ftp.user,
         password: config.ftp.pass,
-        secure: config.ftp.secure, // Use FTPS if enabled
-        secureOptions: config.ftp.secure ? { rejectUnauthorized: false } : undefined, // For self-signed certs, but ideally verify
+        secure: config.ftp.secure,
+        secureOptions: config.ftp.secure ? { rejectUnauthorized: config.ftp.rejectUnauthorized } : undefined,
       });
       this.log.info('Connected to FTP server');
     } catch (error) {

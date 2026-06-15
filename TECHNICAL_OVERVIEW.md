@@ -168,7 +168,7 @@ Foreign-key safety:
 
 ### 10) Observability / debug boundaries
 
-When `PIPELINE_DEBUG=1`, the pipeline logs “boundary samples” (keys + a sample record) at multiple points using `logBoundarySample()` in `src/utils/pipeline-debug.ts`.
+When `LOG_LEVEL=debug`, the pipeline logs “boundary samples” (keys + a sample record) at multiple points using `logBoundarySample()` in `src/utils/pipeline-debug.ts`.
 
 ## Shopify integration
 
@@ -207,7 +207,7 @@ id); variants by `sku`. `productSet` reconciles variants by SKU automatically, s
 variant removed from a model's set is removed from the Shopify product.
 
 Bookkeeping tables (store-agnostic, migration `0006`): `store_product_links`,
-`store_variant_links`, `store_sync_logs` (replaces `ecwid_sync_logs`).
+`store_variant_links`, `store_sync_logs`.
 
 ## Security / sanitization expectations
 
