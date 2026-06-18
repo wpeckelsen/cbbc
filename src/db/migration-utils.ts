@@ -8,11 +8,12 @@ export const MIGRATIONS_TABLE = 'schema_migrations';
 export function getDatabaseUrl(): string {
   const url =
     config.database.url ||
+    process.env.DATABASE_PUBLIC_URL ||
     process.env.DATABASE_URL ||
     process.env.POSTGRES_URL ||
     '';
   if (!url) {
-    throw new Error('DATABASE_URL is not set');
+    throw new Error('DATABASE_PUBLIC_URL / DATABASE_URL is not set');
   }
   return url;
 }
