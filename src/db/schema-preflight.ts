@@ -1,6 +1,6 @@
 import { Logger } from 'pino';
 import { logger as defaultLogger } from '../logger';
-import { createClient } from './migration-utils';
+import { getDatabasePool } from '../api/db-client';
 
 const columnsCache = new Map<string, Set<string>>();
 
@@ -9,22 +9,18 @@ async function fetchTableColumns(table: string): Promise<Set<string>> {
   const cached = columnsCache.get(cacheKey);
   if (cached) return cached;
 
-  const client = await createClient();
-  try {
-    const res = await client.query(
-      `SELECT column_name
-       FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = $1
-       ORDER BY ordinal_position ASC;`,
-      [table]
-    );
+  const pool = getDatabasePool();
+  const res = await pool.query(
+    `SELECT column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = $1
+     ORDER BY ordinal_position ASC;`,
+    [table]
+  );
 
-    const set = new Set<string>((res.rows as Array<{ column_name: string }>).map((r) => r.column_name));
-    columnsCache.set(cacheKey, set);
-    return set;
-  } finally {
-    await client.end();
-  }
+  const set = new Set<string>((res.rows as Array<{ column_name: string }>).map((r) => r.column_name));
+  columnsCache.set(cacheKey, set);
+  return set;
 }
 
 export async function preflightDropUnknownColumns(
@@ -72,7 +68,7 @@ export async function preflightDropUnknownColumns(
       droppedKeys,
       sampleKeys: Object.keys(records[0] ?? {}).sort(),
     },
-    'Dropped unknown columns from Supabase payload'
+    'Dropped unknown columns from DB payload'
   );
 
   return { records: filtered, droppedKeys };

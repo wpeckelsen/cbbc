@@ -32,12 +32,8 @@ export const config = {
   database: {
     url:
       process.env.DATABASE_URL ||
-      process.env.SUPABASE_DB_URL ||
-      process.env.SUPABASE_DATABASE_URL ||
-      process.env.SUPABASE_POSTGRES_URL ||
+      process.env.POSTGRES_URL ||
       '',
-    supabaseUrl: process.env.SUPABASE_API_BASE_URL || '',
-    supabaseKey: process.env.SUPABASE_SECRET_KEY || '',
   },
   shopify: {
     storeDomain: process.env.SHOPIFY_STORE_DOMAIN || '',

@@ -16,7 +16,7 @@ import {
   StoreProductLink,
 } from '../api/products-api';
 import { ShopifyClient, shopifyClient as defaultShopifyClient, InventoryQuantity } from './shopify-client';
-import { SupabaseClient } from '../api/supabase-client';
+import { DatabaseClient } from '../api/db-client';
 import { buildProductSetInput, handleForModel } from './mappers';
 import { RunContext } from '../logging';
 import { checkDrift } from '../db/drift-check';
@@ -33,7 +33,7 @@ type PushSummary = {
 };
 
 /**
- * Push the promoted Supabase catalogue to Shopify.
+ * Push the promoted catalogue to Shopify.
  *
  * - Upserts every promoted model as a Shopify product (+ grouped variants) via
  *   `productSet`, keyed by a deterministic handle so re-runs update in place.
@@ -62,8 +62,8 @@ export async function runShopifyPush(): Promise<PushSummary> {
 
   // Wire modules to the run logger
   const shopify = new ShopifyClient(log);
-  const supabase = new SupabaseClient(log);
-  configureProductsApi(log, supabase);
+  const db = new DatabaseClient(log);
+  configureProductsApi(log, db);
 
   const forcePush = config.shopify.forcePush;
   if (forcePush) log.warn('SHOPIFY_FORCE_PUSH is enabled — all models will be pushed regardless of content hash');
