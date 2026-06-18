@@ -675,7 +675,7 @@ export async function insertStockStaging(stock: any[], source: string): Promise<
       const batch = formattedStock.slice(start, end);
       
       logBoundarySample(`pre-staging:stock_staging:${source}`, batch as any, undefined, log);
-      await dbClient.insert('stock_staging', batch, {
+      await dbClient.upsert('stock_staging', batch, 'product_code, source', {
         boundary: `pipeline.pre-staging.stock_staging:${source}`,
       });
       log.info(`Batch ${i + 1}/${batches} complete (${batch.length} stock records)`);
