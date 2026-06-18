@@ -36,7 +36,12 @@ export function handleForModel(modelCode: string): string {
 
 function priceString(variant: ProductionVariant): string {
   // Shopify store sells in DKK — use the pre-converted DKK price.
-  return Number(variant.price_dkk_excl_vat).toFixed(2);
+  const dkk = Number(variant.price_dkk_excl_vat);
+  if (!isNaN(dkk) && isFinite(dkk)) return dkk.toFixed(2);
+  // Fallback: live-convert from EUR if the DKK column is missing/null.
+  const eur = Number(variant.price_eur_excl_vat);
+  if (!isNaN(eur) && isFinite(eur)) return (eur * 7.47417).toFixed(2);
+  throw new Error(`Variant ${variant.product_code} has no usable price (dkk=${variant.price_dkk_excl_vat}, eur=${variant.price_eur_excl_vat})`);
 }
 
 function distinct<T>(items: T[]): T[] {

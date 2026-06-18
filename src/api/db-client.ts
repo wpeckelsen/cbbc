@@ -1,8 +1,13 @@
-import { Pool } from 'pg';
+import { Pool, types } from 'pg';
 import { Logger } from 'pino';
 import { config } from '../config/env';
 import { logger as defaultLogger } from '../logger';
 import { preflightDropUnknownColumns } from '../db/schema-preflight';
+
+// pg returns NUMERIC (OID 1700) as strings by default to avoid precision loss.
+// The codebase expects JS numbers (the old Supabase REST layer returned JSON
+// numbers). Register a global parser so every pool/client sees numbers instead.
+types.setTypeParser(1700, (val: string) => parseFloat(val));
 
 /** PostgreSQL max bind parameters per query. */
 const PG_MAX_PARAMS = 65535;
