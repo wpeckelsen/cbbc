@@ -1,7 +1,10 @@
--- Database schema for CBBC FTP Worker
--- Run this against your PostgreSQL database
+-- Consolidated schema for the CBBC product pipeline.
+-- Produces the same final state as the former migrations 0001-0011.
 
--- Staging tables for raw data
+-- ============================================================================
+-- Staging tables (raw supplier data)
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS products_staging (
     product_code TEXT PRIMARY KEY,
     categories TEXT,
@@ -32,7 +35,7 @@ CREATE TABLE IF NOT EXISTS products_staging (
     product_name_sv TEXT,
     barcode TEXT,
     compound TEXT,
-    lug_height NUMERIC,
+    lug_height TEXT,
     lug_height_unit TEXT,
     oem_number TEXT,
     tyre_studs TEXT,
@@ -40,99 +43,99 @@ CREATE TABLE IF NOT EXISTS products_staging (
     waterproof TEXT,
     foldable TEXT,
     bolt_pattern TEXT,
-    top_hole_diameter NUMERIC,
+    top_hole_diameter TEXT,
     top_hole_diameter_unit TEXT,
-    top_eyelet_width NUMERIC,
+    top_eyelet_width TEXT,
     top_eyelet_width_unit TEXT,
-    bottom_hole_diameter NUMERIC,
+    bottom_hole_diameter TEXT,
     bottom_hole_diameter_unit TEXT,
-    bottom_eyelet_width NUMERIC,
+    bottom_eyelet_width TEXT,
     bottom_eyelet_width_unit TEXT,
     construction TEXT,
     intercom_range TEXT,
     bulb_base TEXT,
     resistor TEXT,
-    handlebar_clamp_diameter NUMERIC,
+    handlebar_clamp_diameter TEXT,
     handlebar_clamp_diameter_unit TEXT,
     front_rear_tyre TEXT,
     mounting_kit_included TEXT,
-    winch_max_capacity NUMERIC,
+    winch_max_capacity TEXT,
     winch_max_capacity_unit TEXT,
     tyre_weight_index TEXT,
     tyre_speed_rating TEXT,
     power_light TEXT,
     power_light_unit TEXT,
     helmet_safety_system TEXT,
-    studs_count INTEGER,
+    studs_count TEXT,
     valve_type TEXT,
-    valve_length NUMERIC,
+    valve_length TEXT,
     valve_length_unit TEXT,
     bicycle_brake_type TEXT,
-    handlebar_rise NUMERIC,
+    handlebar_rise TEXT,
     handlebar_rise_unit TEXT,
-    buoyancy NUMERIC,
+    buoyancy TEXT,
     buoyancy_unit TEXT,
     bicycle_brake_model TEXT,
     bicycle_wheel_hub TEXT,
     clothing_size TEXT,
     gender TEXT,
     has_membrane TEXT,
-    package_weight NUMERIC,
+    package_weight TEXT,
     package_weight_unit TEXT,
-    package_height NUMERIC,
+    package_height TEXT,
     package_height_unit TEXT,
-    package_width NUMERIC,
+    package_width TEXT,
     package_width_unit TEXT,
-    package_length NUMERIC,
+    package_length TEXT,
     package_length_unit TEXT,
     packing_size TEXT,
     certifications TEXT,
     size TEXT,
-    tyre_rim_size NUMERIC,
+    tyre_rim_size TEXT,
     tyre_rim_size_unit TEXT,
-    tyre_height NUMERIC,
+    tyre_height TEXT,
     tyre_height_unit TEXT,
-    tyre_width NUMERIC,
+    tyre_width TEXT,
     tyre_width_unit TEXT,
-    max_load NUMERIC,
+    max_load TEXT,
     max_load_unit TEXT,
     etrto_size TEXT,
-    track_length NUMERIC,
+    track_length TEXT,
     track_length_unit TEXT,
-    track_width NUMERIC,
+    track_width TEXT,
     track_width_unit TEXT,
-    track_pitch NUMERIC,
+    track_pitch TEXT,
     track_pitch_unit TEXT,
-    rim_width NUMERIC,
+    rim_width TEXT,
     rim_width_unit TEXT,
-    cc_max NUMERIC,
+    cc_max TEXT,
     cc_max_unit TEXT,
-    cc_min NUMERIC,
+    cc_min TEXT,
     cc_min_unit TEXT,
-    spokes_length NUMERIC,
+    spokes_length TEXT,
     spokes_length_unit TEXT,
-    product_weight NUMERIC,
+    product_weight TEXT,
     product_weight_unit TEXT,
-    product_height NUMERIC,
+    product_height TEXT,
     product_height_unit TEXT,
-    product_width NUMERIC,
+    product_width TEXT,
     product_width_unit TEXT,
-    product_length NUMERIC,
+    product_length TEXT,
     product_length_unit TEXT,
-    sparkplug_thread_length NUMERIC,
-    thickness NUMERIC,
+    sparkplug_thread_length TEXT,
+    thickness TEXT,
     thickness_unit TEXT,
-    diameter NUMERIC,
+    diameter TEXT,
     diameter_unit TEXT,
-    inner_diameter NUMERIC,
+    inner_diameter TEXT,
     inner_diameter_unit TEXT,
-    outer_diameter NUMERIC,
+    outer_diameter TEXT,
     outer_diameter_unit TEXT,
-    riser_height NUMERIC,
+    riser_height TEXT,
     riser_height_unit TEXT,
     oil_type TEXT,
     oil_viscosity TEXT,
-    oil_volume NUMERIC,
+    oil_volume TEXT,
     oil_volume_unit TEXT,
     oil_stroke TEXT,
     sprocket_front TEXT,
@@ -148,12 +151,12 @@ CREATE TABLE IF NOT EXISTS products_staging (
     touch_screen_compatible TEXT,
     sparkplug_seat_configuration TEXT,
     silencer_fitment TEXT,
-    teeth_count INTEGER,
+    teeth_count TEXT,
     pre_drilled TEXT,
     clamp_on TEXT,
     sunvisor TEXT,
     sparkplug_heat_rating TEXT,
-    volume NUMERIC,
+    volume TEXT,
     volume_unit TEXT,
     colour_en TEXT,
     colour_fi TEXT,
@@ -180,11 +183,11 @@ CREATE TABLE IF NOT EXISTS products_staging (
     cable_type TEXT,
     bearing_kit_type TEXT,
     lifejacket_type TEXT,
-    battery_cca NUMERIC,
+    battery_cca TEXT,
     battery_cca_unit TEXT,
-    battery_capacity NUMERIC,
-    "battery_capacity-unit" TEXT, -- Changed from battery_capacity_unit to match error message
-    category_codes TEXT[], -- Added category_codes directly
+    battery_capacity TEXT,
+    "battery_capacity-unit" TEXT,
+    category_codes TEXT[],
     created TIMESTAMPTZ,
     updated TIMESTAMPTZ,
     raw_hash TEXT,
@@ -213,7 +216,7 @@ CREATE TABLE IF NOT EXISTS stock_staging (
     vaasa INTEGER,
     sweden INTEGER,
     total INTEGER,
-    source TEXT, -- 'product_code' or 'ean'
+    source TEXT,
     imported_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (product_code, source)
 );
@@ -238,42 +241,101 @@ CREATE TABLE IF NOT EXISTS images_staging (
     imported_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ============================================================================
 -- Production tables
-CREATE TABLE IF NOT EXISTS products (
-    product_code TEXT PRIMARY KEY,
-    name_en TEXT,
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS product_models (
+    model_code TEXT PRIMARY KEY,
+    name_en TEXT NOT NULL,
     name_fi TEXT,
     name_sv TEXT,
-    brand TEXT,
-    category_codes TEXT[],
-    price_eur_excl_vat NUMERIC,
-    price_eur_incl_vat NUMERIC,
-    stock_total INTEGER,
+    brand TEXT NOT NULL,
+    vendor_name TEXT NOT NULL,
+    category_codes TEXT[] NOT NULL,
+    catalog_restriction TEXT,
+    imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_synced_at TIMESTAMPTZ,
+
+    CONSTRAINT product_models_category_codes_non_empty
+        CHECK (array_length(category_codes, 1) > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_variants (
+    product_code TEXT PRIMARY KEY,
+    model_code TEXT NOT NULL REFERENCES product_models(model_code) ON DELETE CASCADE,
+    name_en TEXT NOT NULL,
+    barcode TEXT NOT NULL,
+    price_eur_excl_vat NUMERIC NOT NULL,
+    price_eur_incl_vat NUMERIC NOT NULL,
+    price_dkk_excl_vat NUMERIC,
+    stock_total INTEGER NOT NULL,
     stock_vaasa INTEGER,
     stock_sweden INTEGER,
-    barcode TEXT,
-    vendor_name TEXT,
-    catalog_restriction TEXT,
-    image_url TEXT,
-    imported_at TIMESTAMPTZ,
+    image_url TEXT NOT NULL,
+    imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_synced_at TIMESTAMPTZ,
-    status TEXT -- 'valid', 'missing_price', 'missing_stock', 'invalid'
+
+    CONSTRAINT product_variants_price_non_negative
+        CHECK (price_eur_excl_vat >= 0 AND price_eur_incl_vat >= 0),
+    CONSTRAINT product_variants_price_incl_gte_excl
+        CHECK (price_eur_incl_vat >= price_eur_excl_vat),
+    CONSTRAINT product_variants_stock_total_non_negative
+        CHECK (stock_total >= 0),
+    CONSTRAINT product_variants_stock_vaasa_non_negative
+        CHECK (stock_vaasa IS NULL OR stock_vaasa >= 0),
+    CONSTRAINT product_variants_stock_sweden_non_negative
+        CHECK (stock_sweden IS NULL OR stock_sweden >= 0),
+    CONSTRAINT product_variants_barcode_numeric
+        CHECK (barcode ~ '^[0-9]+$'),
+    CONSTRAINT product_variants_image_url_http
+        CHECK (image_url ~* '^https?://')
 );
 
-CREATE TABLE IF NOT EXISTS ecwid_sync_logs (
-    product_code TEXT,
-    ecwid_item_id TEXT,
-    synced_at TIMESTAMPTZ,
-    status TEXT, -- 'success', 'failed'
+CREATE INDEX IF NOT EXISTS idx_product_variants_model_code ON product_variants (model_code);
+
+-- ============================================================================
+-- Storefront sync bookkeeping (store-agnostic)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS store_sync_logs (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    scope TEXT NOT NULL,
+    local_code TEXT NOT NULL,
+    external_id TEXT,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
     message TEXT,
-    PRIMARY KEY (product_code, synced_at)
+    synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_store_sync_logs_synced_at ON store_sync_logs (synced_at);
+CREATE INDEX IF NOT EXISTS idx_store_sync_logs_local_code ON store_sync_logs (local_code);
+
+CREATE TABLE IF NOT EXISTS store_product_links (
+    model_code TEXT PRIMARY KEY,
+    external_product_id TEXT NOT NULL,
+    external_handle TEXT,
+    last_synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_pushed_product_hash TEXT,
+    last_pushed_stock_hash TEXT
+);
+
+CREATE TABLE IF NOT EXISTS store_variant_links (
+    product_code TEXT PRIMARY KEY,
+    model_code TEXT NOT NULL,
+    external_variant_id TEXT NOT NULL,
+    external_inventory_item_id TEXT,
+    last_synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_store_variant_links_model_code ON store_variant_links (model_code);
+
+-- ============================================================================
+-- Staging indexes
+-- ============================================================================
+
 CREATE INDEX IF NOT EXISTS idx_products_staging_imported_at ON products_staging (imported_at);
 CREATE INDEX IF NOT EXISTS idx_prices_staging_imported_at ON prices_staging (imported_at);
 CREATE INDEX IF NOT EXISTS idx_stock_staging_imported_at ON stock_staging (imported_at);
 CREATE INDEX IF NOT EXISTS idx_images_staging_imported_at ON images_staging (imported_at);
-CREATE INDEX IF NOT EXISTS idx_products_status ON products (status);
-CREATE INDEX IF NOT EXISTS idx_products_imported_at ON products (imported_at);
-CREATE INDEX IF NOT EXISTS idx_ecwid_sync_logs_synced_at ON ecwid_sync_logs (synced_at);
