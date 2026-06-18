@@ -9,14 +9,7 @@ export function getDatabaseUrl(): string {
   const url =
     config.database.url ||
     process.env.DATABASE_URL ||
-    process.env.SUPABASE_DB_URL ||
-    process.env.SUPABASE_DATABASE_URL ||
-    process.env.SUPABASE_POSTGRES_URL ||
     process.env.POSTGRES_URL ||
-    process.env.POSTGRES_PRISMA_URL ||
-    process.env.DIRECT_URL ||
-    process.env.SUPABASE_CONNECTION_STRING ||
-    process.env.SUPABASE_DB_CONNECTION_STRING ||
     '';
   if (!url) {
     throw new Error('DATABASE_URL is not set');

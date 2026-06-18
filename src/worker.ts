@@ -10,7 +10,7 @@ import { configureProductsApi, insertProductsStaging, insertPricesStaging, inser
 import { logBoundarySample } from './utils/pipeline-debug';
 import { RunContext } from './logging';
 import { checkDrift } from './db/drift-check';
-import { SupabaseClient } from './api/supabase-client';
+import { DatabaseClient } from './api/db-client';
 import fs from 'fs';
 import path from 'path';
 
@@ -73,8 +73,8 @@ async function runPipeline(): Promise<void> {
   log.info('Starting FTP product pipeline');
 
   // Wire the run logger into shared modules
-  const supabase = new SupabaseClient(log);
-  configureProductsApi(log, supabase);
+  const db = new DatabaseClient(log);
+  configureProductsApi(log, db);
 
   const ftpClient = new FtpClient(log);
   const validator = new ProductValidator();

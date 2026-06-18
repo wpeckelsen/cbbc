@@ -1,7 +1,7 @@
 import { ModelWithVariants, ProductionModel, ProductionVariant } from '../api/products-api';
 
 /**
- * Storefront-facing mapping rules (Supabase production tables -> Shopify).
+ * Storefront-facing mapping rules (production tables -> Shopify).
  *
  * Field mapping:
  * - product title       <- model.name_en

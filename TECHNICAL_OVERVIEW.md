@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This service ingests a supplier product feed (Duell FTP CSV exports), normalizes and validates it, selects a capped subset of “good” products, and writes both staging and production-ready tables in Supabase. A separate Shopify integration pushes the promoted catalogue (models + variants) to a Shopify storefront.
+This service ingests a supplier product feed (Duell FTP CSV exports), normalizes and validates it, selects a capped subset of “good” products, and writes both staging and production-ready tables in PostgreSQL. A separate Shopify integration pushes the promoted catalogue (models + variants) to a Shopify storefront.
 
 ## Tech stack
 
@@ -12,16 +12,14 @@ This service ingests a supplier product feed (Duell FTP CSV exports), normalizes
 - **FTP**: `basic-ftp`
 - **CSV parsing**: `csv-parser`
 - **Logging**: `pino` + `pino-pretty`
-- **Database access**
-  - **Supabase REST API** for inserts/upserts/selects (`src/api/supabase-client.ts`)
-  - **Direct Postgres** via `pg` for migrations and schema introspection (`src/db/migrate.ts`, `src/db/schema-preflight.ts`)
+- **Database access**: PostgreSQL via `pg` — a shared connection pool (`src/api/db-client.ts`) for all CRUD and `src/db/migrate.ts` + `src/db/schema-preflight.ts` for migrations and schema introspection
 - **Containerization**: Docker (`Dockerfile`, `docker-compose.yml`)
 
 ## Main entrypoints
 
 - **Pipeline worker**: `src/worker.ts`
-- **Supabase operations / promotion logic**: `src/api/products-api.ts`
-- **Supabase REST client**: `src/api/supabase-client.ts`
+- **DB operations / promotion logic**: `src/api/products-api.ts`
+- **PostgreSQL client**: `src/api/db-client.ts`
 - **Validation + enrichment**: `src/validation/product-validator.ts`
 - **Filtering**: `src/filters/product-filter.ts`
 - **Shopify push script**: `src/shopify/push-production.ts` (`npm run shopify:push:prod`)
@@ -126,9 +124,9 @@ Algorithm:
 - Keep the top 50 models.
 - Promote all valid variants belonging to those selected models.
 
-### 8) Write staging tables (Supabase)
+### 8) Write staging tables
 
-Staging writes occur via Supabase REST API in `src/api/products-api.ts`:
+Staging writes occur via the database client in `src/api/products-api.ts`:
 
 - `products_staging` (upsert)
 - `prices_staging` (upsert)
@@ -140,9 +138,9 @@ Staging writes occur via Supabase REST API in `src/api/products-api.ts`:
 Notes:
 
 - `products_staging` uses an explicit allowlist of columns (`PRODUCTS_STAGING_COLUMNS`) to enforce the staging contract.
-- Supabase writes also run a schema preflight that introspects the DB and drops unknown keys if the schema has changed (`src/db/schema-preflight.ts`).
+- Writes also run a schema preflight that introspects the DB and drops unknown keys if the schema has changed (`src/db/schema-preflight.ts`).
 
-### 9) Promote to production tables (Supabase)
+### 9) Promote to production tables
 
 Promotion is implemented in `promoteToProduction()`.
 
@@ -212,4 +210,4 @@ Bookkeeping tables (store-agnostic, migration `0006`): `store_product_links`,
 ## Security / sanitization expectations
 
 - Do not commit secrets. Configuration comes from environment variables (`src/config/env.ts`).
-- Documentation should refer to systems (Duell FTP, Supabase, Shopify) but must not include credentials or sensitive URLs/tokens.
+- Documentation should refer to systems (Duell FTP, PostgreSQL, Shopify) but must not include credentials or sensitive URLs/tokens.

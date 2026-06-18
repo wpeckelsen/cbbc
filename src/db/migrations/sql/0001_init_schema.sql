@@ -1,5 +1,5 @@
 -- Database schema for CBBC FTP Worker
--- Run this against your PostgreSQL database (local or Supabase)
+-- Run this against your PostgreSQL database
 
 -- Staging tables for raw data
 CREATE TABLE IF NOT EXISTS products_staging (

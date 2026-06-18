@@ -2,7 +2,7 @@
 
 A scheduled Node.js/TypeScript worker that pulls a supplier product feed (Duell)
 over FTP, validates and reshapes it into models + sellable variants, caps the
-output, and writes it to Supabase. A separate Shopify storefront sync upserts the
+output, and writes it to PostgreSQL. A separate Shopify storefront sync upserts the
 promoted catalogue into Shopify.
 
 For deeper data-flow detail see [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md);
@@ -14,9 +14,7 @@ this document is the higher-level map.
 - **Scheduling**: `node-cron` (`CRON_SCHEDULE`, default `0 2 * * *`).
 - **FTP**: `basic-ftp`. **CSV**: `csv-parser` (`;` delimited).
 - **Logging**: `pino` + `pino-pretty`.
-- **Data stores**:
-  - Supabase **REST API** (`fetch`) for staging/production reads & writes.
-  - **Direct Postgres** (`pg`) for migrations and schema introspection.
+- **Data store**: PostgreSQL via `pg` (shared connection pool for all CRUD, migrations, and schema introspection).
 - **Containerization**: `Dockerfile` + `docker-compose.yml` (worker + local Postgres).
 
 ## Modules (`src/`)
@@ -24,12 +22,12 @@ this document is the higher-level map.
 | Path | Responsibility |
 |------|----------------|
 | `worker.ts` | Entrypoint + cron schedule. Orchestrates the entire pipeline and holds most of the model/variant + capping business logic. |
-| `config/env.ts` | Central env-var config (FTP, DB/Supabase, Shopify, cron, dev flags). |
+| `config/env.ts` | Central env-var config (FTP, DB, Shopify, cron, dev flags). |
 | `ftp/ftp-client.ts` | FTP connect/list/download, retry with backoff, on-disk caching. |
 | `parsers/csv-parser.ts` | Per-file CSV parsers + record type definitions. |
 | `validation/product-validator.ts` | `enrichProduct()` joins price/stock/image and produces `ValidatedProduct` with an `errors[]` list. |
 | `filters/product-filter.ts` | Generic `ProductFilter`; effective rules are injected from `worker.ts` via `customLogic`. |
-| `api/supabase-client.ts` | Thin Supabase REST wrapper (insert/upsert/select/delete) with schema preflight. |
+| `api/db-client.ts` | PostgreSQL client (insert/upsert/select/delete) backed by `pg.Pool`, with schema preflight. |
 | `api/products-api.ts` | Staging inserts, `promoteToProduction()` (models + variants), store-agnostic sync bookkeeping (links + logs) and promoted-catalogue reads. Largest file (~1k lines), includes the `products_staging` column allowlist. |
 | `db/migrate.ts`, `migration-utils.ts`, `migrations/sql/*` | Versioned SQL migrations tracked in a migrations table. |
 | `db/schema-preflight.ts` | Introspects live table columns and drops unknown keys before writes. |
@@ -53,7 +51,7 @@ this document is the higher-level map.
    brand, price+stock required).
 8. **Cap**: eligible models = those with ≥1 qualifying variant; sort by valid-variant
    count then code; keep top `MVP_MODEL_LIMIT = 50`; promote all valid variants of those models.
-9. **Write staging** (Supabase upsert/insert): `products_staging`, `prices_staging`,
+9. **Write staging** (upsert/insert): `products_staging`, `prices_staging`,
    `stock_staging`, `images_staging`, `categories`, `category_hierarchy`.
 10. **Promote** to production tables `product_models` + `product_variants`
     (FK-safe: variants kept only if their `model_code` exists in promoted models).
@@ -83,8 +81,7 @@ docker compose up     # worker + local postgres
 ```
 
 Configuration is entirely via environment variables (`.env`, see `config/env.ts`):
-FTP (`FTP_HOST/PORT/USER/PASS/SECURE`), DB (`DATABASE_URL` / `SUPABASE_*`),
-Supabase REST (`SUPABASE_API_BASE_URL`, `SUPABASE_SECRET_KEY`),
+FTP (`FTP_HOST/PORT/USER/PASS/SECURE`), DB (`DATABASE_URL`),
 Shopify (`SHOPIFY_STORE_DOMAIN`, `SHOPIFY_ADMIN_ACCESS_TOKEN`, `SHOPIFY_API_VERSION`,
 `SHOPIFY_LOCATION_ID`, `SHOPIFY_PUSH_CRON`), `CRON_SCHEDULE`, `LOG_LEVEL`,
 `DEV_CLEAN_SLATE`, `PIPELINE_DEBUG`. See `.env.example`. No secrets are committed.

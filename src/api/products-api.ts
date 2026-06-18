@@ -1,5 +1,5 @@
 import { Logger } from 'pino';
-import { SupabaseClient, supabaseClient as defaultSupabaseClient } from './supabase-client';
+import { DatabaseClient, databaseClient as defaultDatabaseClient } from './db-client';
 import { ValidatedProduct } from '../validation/product-validator';
 import { logger as defaultLogger } from '../logger';
 import { logBoundarySample } from '../utils/pipeline-debug';
@@ -7,18 +7,18 @@ import { logBoundarySample } from '../utils/pipeline-debug';
 /** Fixed EUR → DKK conversion rate. */
 const EUR_TO_DKK = 7.47417;
 
-// Module-level logger + supabase client, configurable per pipeline run.
+// Module-level logger + database client, configurable per pipeline run.
 let log: Logger = defaultLogger;
-let supabaseClient: SupabaseClient = defaultSupabaseClient;
+let dbClient: DatabaseClient = defaultDatabaseClient;
 
 /**
- * Configure module-level logger and (optionally) Supabase client for the
+ * Configure module-level logger and (optionally) database client for the
  * current pipeline run. Call this once at the start of a run; reset is
  * automatic at process exit or can be done manually.
  */
-export function configureProductsApi(logger: Logger, client?: SupabaseClient): void {
+export function configureProductsApi(logger: Logger, client?: DatabaseClient): void {
   log = logger;
-  if (client) supabaseClient = client;
+  if (client) dbClient = client;
 }
 
 function toNullableNumber(value: any): number | null {
@@ -558,7 +558,7 @@ export async function insertProductsStaging(products: any[]): Promise<void> {
 
       logBoundarySample('pre-staging:products_staging', transformedBatch as any, undefined, log);
       
-      await supabaseClient.upsert('products_staging', transformedBatch, 'product_code', {
+      await dbClient.upsert('products_staging', transformedBatch, 'product_code', {
         boundary: 'pipeline.pre-staging.products_staging',
       });
       log.info(`Batch ${i + 1}/${batches} complete (${batch.length} products)`);
@@ -573,15 +573,15 @@ export async function insertProductsStaging(products: any[]): Promise<void> {
 }
 
 export async function clearStagingTablesForDev(): Promise<void> {
-  await supabaseClient.deleteAllByNonNullColumn('products_staging', 'product_code');
-  await supabaseClient.deleteAllByNonNullColumn('prices_staging', 'product_code');
-  await supabaseClient.deleteAllByNonNullColumn('stock_staging', 'source');
-  await supabaseClient.deleteAllByNonNullColumn('images_staging', 'product_code');
+  await dbClient.deleteAllByNonNullColumn('products_staging', 'product_code');
+  await dbClient.deleteAllByNonNullColumn('prices_staging', 'product_code');
+  await dbClient.deleteAllByNonNullColumn('stock_staging', 'source');
+  await dbClient.deleteAllByNonNullColumn('images_staging', 'product_code');
 }
 
 export async function clearProductionProductsForDev(): Promise<void> {
-  await supabaseClient.deleteAllByNonNullColumn('product_variants', 'product_code');
-  await supabaseClient.deleteAllByNonNullColumn('product_models', 'model_code');
+  await dbClient.deleteAllByNonNullColumn('product_variants', 'product_code');
+  await dbClient.deleteAllByNonNullColumn('product_models', 'model_code');
 }
 
 /**
@@ -621,7 +621,7 @@ export async function insertPricesStaging(prices: any[]): Promise<void> {
       const batch = formattedPrices.slice(start, end);
       
       logBoundarySample('pre-staging:prices_staging', batch as any, undefined, log);
-      await supabaseClient.upsert('prices_staging', batch, 'product_code', {
+      await dbClient.upsert('prices_staging', batch, 'product_code', {
         boundary: 'pipeline.pre-staging.prices_staging',
       });
       log.info(`Batch ${i + 1}/${batches} complete (${batch.length} prices)`);
@@ -675,7 +675,7 @@ export async function insertStockStaging(stock: any[], source: string): Promise<
       const batch = formattedStock.slice(start, end);
       
       logBoundarySample(`pre-staging:stock_staging:${source}`, batch as any, undefined, log);
-      await supabaseClient.insert('stock_staging', batch, {
+      await dbClient.insert('stock_staging', batch, {
         boundary: `pipeline.pre-staging.stock_staging:${source}`,
       });
       log.info(`Batch ${i + 1}/${batches} complete (${batch.length} stock records)`);
@@ -721,7 +721,7 @@ export async function insertCategories(categories: any[]): Promise<void> {
 
     log.info(`Deduplicated categories: ${categories.length} -> ${deduped.length} (prefer English, lang 2)`);
     logBoundarySample('pre-staging:categories', deduped as any, undefined, log);
-    await supabaseClient.upsert('categories', deduped, 'id', {
+    await dbClient.upsert('categories', deduped, 'id', {
       boundary: 'pipeline.pre-staging.categories',
     });
     log.info(`Inserted ${deduped.length} categories`);
@@ -750,7 +750,7 @@ export async function insertCategoryHierarchy(hierarchy: any[]): Promise<void> {
     }));
     
     logBoundarySample('pre-staging:category_hierarchy', formattedHierarchy as any, undefined, log);
-    await supabaseClient.upsert('category_hierarchy', formattedHierarchy, 'id', {
+    await dbClient.upsert('category_hierarchy', formattedHierarchy, 'id', {
       boundary: 'pipeline.pre-staging.category_hierarchy',
     });
     log.info(`Inserted ${formattedHierarchy.length} category hierarchy records`);
@@ -789,7 +789,7 @@ export async function insertImagesStaging(images: any[]): Promise<void> {
       const batch = formattedImages.slice(start, end);
       
       logBoundarySample('pre-staging:images_staging', batch as any, undefined, log);
-      await supabaseClient.insert('images_staging', batch, {
+      await dbClient.insert('images_staging', batch, {
         boundary: 'pipeline.pre-staging.images_staging',
       });
       log.info(`Batch ${i + 1}/${batches} complete (${batch.length} images)`);
@@ -981,7 +981,7 @@ export async function promoteToProduction(
       const start = i * BATCH_SIZE;
       const end = Math.min(start + BATCH_SIZE, modelsToPromote.length);
       const batch = modelsToPromote.slice(start, end);
-      await supabaseClient.upsert('product_models', batch, 'model_code', {
+      await dbClient.upsert('product_models', batch, 'model_code', {
         boundary: 'pipeline.pre-prod.product_models',
       });
       log.info(`Batch ${i + 1}/${modelBatches} complete (${batch.length} product models)`);
@@ -993,7 +993,7 @@ export async function promoteToProduction(
       const start = i * BATCH_SIZE;
       const end = Math.min(start + BATCH_SIZE, filteredVariantsToPromote.length);
       const batch = filteredVariantsToPromote.slice(start, end);
-      await supabaseClient.upsert('product_variants', batch, 'product_code', {
+      await dbClient.upsert('product_variants', batch, 'product_code', {
         boundary: 'pipeline.pre-prod.product_variants',
       });
       log.info(`Batch ${i + 1}/${variantBatches} complete (${batch.length} product variants)`);
@@ -1075,7 +1075,7 @@ async function selectAllPaged<T>(
   let offset = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const page = await supabaseClient.select<T>(
+    const page = await dbClient.select<T>(
       table,
       '*',
       undefined,
@@ -1142,7 +1142,7 @@ export async function upsertStoreProductLink(link: {
   last_pushed_stock_hash?: string | null;
 }): Promise<void> {
   try {
-    await supabaseClient.upsert(
+    await dbClient.upsert(
       'store_product_links',
       [
         {
@@ -1174,7 +1174,7 @@ export async function upsertStoreVariantLink(link: {
   external_inventory_item_id?: string | null;
 }): Promise<void> {
   try {
-    await supabaseClient.upsert(
+    await dbClient.upsert(
       'store_variant_links',
       [
         {
@@ -1201,8 +1201,8 @@ export async function upsertStoreVariantLink(link: {
  */
 export async function deleteStoreProductLink(modelCode: string): Promise<void> {
   try {
-    await supabaseClient.delete('store_variant_links', { model_code: modelCode });
-    await supabaseClient.delete('store_product_links', { model_code: modelCode });
+    await dbClient.delete('store_variant_links', { model_code: modelCode });
+    await dbClient.delete('store_product_links', { model_code: modelCode });
   } catch (error) {
     const err = error as Error;
     log.error('Failed to delete store product link', { error: err.message, modelCode });
@@ -1224,7 +1224,7 @@ export type StoreVariantLink = {
  * the Shopify API.
  */
 export async function getAllStoreVariantLinks(modelCode: string): Promise<StoreVariantLink[]> {
-  return supabaseClient.select<StoreVariantLink>('store_variant_links', '*', { model_code: modelCode });
+  return dbClient.select<StoreVariantLink>('store_variant_links', '*', { model_code: modelCode });
 }
 
 /**
@@ -1232,7 +1232,7 @@ export async function getAllStoreVariantLinks(modelCode: string): Promise<StoreV
  */
 export async function updateModelSyncStatus(modelCode: string, lastSyncedAt: Date): Promise<void> {
   try {
-    await supabaseClient.update(
+    await dbClient.update(
       'product_models',
       { last_synced_at: lastSyncedAt.toISOString() },
       { model_code: modelCode }
@@ -1257,7 +1257,7 @@ export async function logStoreSync(entry: {
   message?: string;
 }): Promise<void> {
   try {
-    await supabaseClient.insert(
+    await dbClient.insert(
       'store_sync_logs',
       [
         {

@@ -7,7 +7,7 @@ This project is an automated pipeline that:
 - Downloads product data from a supplier FTP feed (Duell)
 - Cleans and checks the data for completeness
 - Selects a limited set of products to publish (to keep the system manageable)
-- Stores the selected products in a database (Supabase)
+- Stores the selected products in a PostgreSQL database
 - Pushes the selected products to an online store (Shopify)
 
 ## Why it exists
@@ -26,7 +26,7 @@ The pipeline pulls multiple CSV files from an FTP server, including:
 
 ## What comes out
 
-After a run, the selected products are available in Supabase as:
+After a run, the selected products are available in the database as:
 
 - **Product models** (the “main product” concept)
 - **Product variants / SKUs** (the sellable items)
@@ -61,7 +61,7 @@ The worker is designed to run on a schedule (cron). The exact timing is configur
 
 ## Store sync (Shopify)
 
-After the pipeline builds a clean set of models + variants in Supabase, a separate
+After the pipeline builds a clean set of models + variants in the database, a separate
 step pushes them to a Shopify storefront via the GraphQL Admin API:
 
 - Each **product model** becomes a Shopify **product**; its **variants** are grouped
