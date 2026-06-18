@@ -410,7 +410,9 @@ if (config.nodeEnv !== 'test') {
   logger.info('Cron job scheduled', { schedule: config.cron.schedule });
 }
 
-// For manual testing
-if (require.main === module) {
+// Run immediately only in dev or when explicitly requested via RUN_ON_STARTUP=true.
+// In production the cron schedule above handles execution; an immediate run would
+// cause a crash loop if the pipeline OOMs on Railway's constrained heap.
+if (require.main === module && (!config.isProd || process.env.RUN_ON_STARTUP === 'true')) {
   runPipeline().catch(console.error);
 }
