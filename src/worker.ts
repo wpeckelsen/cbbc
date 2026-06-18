@@ -14,6 +14,12 @@ import { DatabaseClient } from './api/db-client';
 import fs from 'fs';
 import path from 'path';
 
+// ---------------------------------------------------------------------------
+// Batch size: number of product rows processed and inserted per flush.
+// Keeping this at 1000 bounds peak memory to ~1000 enriched rows at a time.
+// ---------------------------------------------------------------------------
+const PRODUCT_BATCH_SIZE = 1000;
+
 function normalizeHyphenKeysInPlace(record: Record<string, any>): void {
   for (const k of Object.keys(record)) {
     if (!k.includes('-')) continue;
@@ -48,22 +54,6 @@ function normalizeCategoryCodesFromCsv(value: any): string[] {
     .filter((v) => v !== '')
     .map((v) => v.toLowerCase());
   return normalizeCategoryCodes(parts);
-}
-
-function isConsistentModelGroup(variants: any[]): boolean {
-  if (variants.length <= 1) return true;
-  const first = variants[0];
-  const brand = typeof first.brand === 'string' ? first.brand.trim() : '';
-  const vendor = typeof first.vendor_name === 'string' ? first.vendor_name.trim() : '';
-  const categoryKey = normalizeCategoryCodes(first.category_codes).join('|');
-
-  for (const v of variants) {
-    const b = typeof v.brand === 'string' ? v.brand.trim() : '';
-    const vn = typeof v.vendor_name === 'string' ? v.vendor_name.trim() : '';
-    const ck = normalizeCategoryCodes(v.category_codes).join('|');
-    if (b !== brand || vn !== vendor || ck !== categoryKey) return false;
-  }
-  return true;
 }
 
 async function runPipeline(): Promise<void> {
@@ -137,250 +127,269 @@ async function runPipeline(): Promise<void> {
     }
     log.info(`Downloaded ${filesToDownload.length} CSV files (${cachedCount} from cache)`);
 
-    // Step 3: Parse files
-    const products = fs.existsSync(path.join(cacheDir, 'products.csv')) ? await parseProductsCsv(path.join(cacheDir, 'products.csv'), log) : [];
-    for (const p of products) normalizeHyphenKeysInPlace(p);
-    const prices = fs.existsSync(path.join(cacheDir, 'prices.csv')) ? await parsePricesCsv(path.join(cacheDir, 'prices.csv'), log) : [];
-    const stockProduct = fs.existsSync(path.join(cacheDir, 'stock_product.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_product.csv'), 'product_code', log) : [];
-    const categories = fs.existsSync(path.join(cacheDir, 'categories.csv')) ? await parseCategoriesCsv(path.join(cacheDir, 'categories.csv'), log) : [];
-    const categoryHierarchy = fs.existsSync(path.join(cacheDir, 'category_hierarchy.csv')) ? await parseCategoryHierarchyCsv(path.join(cacheDir, 'category_hierarchy.csv'), log) : [];
-    const images = fs.existsSync(path.join(cacheDir, 'images.csv')) ? await parseImagesCsv(path.join(cacheDir, 'images.csv'), log) : [];
+    // -----------------------------------------------------------------------
+    // Step 3: Load lookup tables fully into memory.
+    //
+    // Prices, stock, and images are keyed by product_code and are accessed
+    // O(1) during product streaming. Categories and hierarchy are small
+    // reference tables inserted to the DB before the main product pass.
+    //
+    // The products CSV — potentially millions of rows — is NOT loaded here;
+    // it is streamed in two lightweight passes below.
+    // -----------------------------------------------------------------------
+    const productsPath = path.join(cacheDir, 'products.csv');
+    const pricesPath   = path.join(cacheDir, 'prices.csv');
+    const stockPath    = path.join(cacheDir, 'stock_product.csv');
+    const catPath      = path.join(cacheDir, 'categories.csv');
+    const hierPath     = path.join(cacheDir, 'category_hierarchy.csv');
+    const imagesPath   = path.join(cacheDir, 'images.csv');
 
-    logBoundarySample('post-parse:products', products as any, undefined, log);
-    logBoundarySample('post-parse:prices', prices as any, undefined, log);
-    logBoundarySample('post-parse:stock_product', stockProduct as any, undefined, log);
-    logBoundarySample('post-parse:categories', categories as any, undefined, log);
+    const priceMap = fs.existsSync(pricesPath)
+      ? await parsePricesCsv(pricesPath, log)
+      : new Map();
+    const stockMap = fs.existsSync(stockPath)
+      ? await parseStockCsv(stockPath, 'product_code', log)
+      : new Map();
+    const imageMap = fs.existsSync(imagesPath)
+      ? await parseImagesCsv(imagesPath, log)
+      : new Map();
+
+    const categories      = fs.existsSync(catPath)   ? await parseCategoriesCsv(catPath, log)            : [];
+    const categoryHierarchy = fs.existsSync(hierPath) ? await parseCategoryHierarchyCsv(hierPath, log)   : [];
+
+    logBoundarySample('post-parse:categories',         categories as any,        undefined, log);
     logBoundarySample('post-parse:category_hierarchy', categoryHierarchy as any, undefined, log);
-    logBoundarySample('post-parse:images', images as any, undefined, log);
 
-    log.info(`Parsed ${products.length} product rows`);
-
-    // Step 4: Build lookup maps for O(1) access (avoid O(n²) .find() loops)
-    const priceMap = new Map(prices.map(p => [p.PRODUCT_CODE, p]));
-    const stockMap = new Map(stockProduct.map(s => [s.PRODUCT_CODE, s]));
-    const imageMap = new Map(images.map(i => [i.PRODUCT_CODE, i]));
-
-    // Step 5: Validate and enrich products (in-memory, before sending to DB)
-    const parentRows: any[] = [];
-    const variantRows: any[] = [];
-    for (const p of products) {
-      const parent = normalizeNonEmptyString(p.parent);
-      if (parent) variantRows.push(p);
-      else parentRows.push(p);
+    // Insert reference tables to DB immediately — they are small and needed
+    // by the DB before variants are promoted.
+    if (config.dev.cleanSlate) {
+      await clearStagingTablesForDev();
     }
+    if (categories.length > 0)        await insertCategories(categories);
+    if (categoryHierarchy.length > 0) await insertCategoryHierarchy(categoryHierarchy);
 
-    log.info(`Split into ${parentRows.length} parent rows + ${variantRows.length} variant rows`);
-
+    // -----------------------------------------------------------------------
+    // Step 4 (Pass 1): Stream products once to build modelMetadataByCode.
+    //
+    // Only parent rows (parent field empty) contribute model metadata.
+    // This pass is memory-cheap: we store only a small metadata object per
+    // unique model code, not the full raw row.
+    // -----------------------------------------------------------------------
     const modelMetadataByCode = new Map<string, any>();
-    for (const p of parentRows) {
-      const modelCode = normalizeNonEmptyString(p.product_code);
-      if (!modelCode) continue;
-      if (modelMetadataByCode.has(modelCode)) continue;
 
-      modelMetadataByCode.set(modelCode, {
-        product_model_name_en: normalizeNonEmptyString(p.product_model_name_en),
-        product_model_name_fi: normalizeNonEmptyString(p.product_model_name_fi),
-        product_model_name_sv: normalizeNonEmptyString(p.product_model_name_sv),
-        name_en: normalizeNonEmptyString(p.product_name_en),
-        name_fi: normalizeNonEmptyString(p.product_name_fi),
-        name_sv: normalizeNonEmptyString(p.product_name_sv),
-        brand: normalizeNonEmptyString(p.brand),
-        vendor_name: normalizeNonEmptyString(p.vendor_name),
-        category_codes: normalizeCategoryCodesFromCsv(p.categories),
-        catalog_restriction: normalizeNonEmptyString(p.catalog_restriction),
-      });
+    if (fs.existsSync(productsPath)) {
+      await parseProductsCsv(productsPath, async (p) => {
+        normalizeHyphenKeysInPlace(p);
+        const parent = normalizeNonEmptyString(p.parent);
+        if (parent) return; // variant row — skip in this pass
+
+        const modelCode = normalizeNonEmptyString(p.product_code);
+        if (!modelCode || modelMetadataByCode.has(modelCode)) return;
+
+        modelMetadataByCode.set(modelCode, {
+          product_model_name_en: normalizeNonEmptyString(p.product_model_name_en),
+          product_model_name_fi: normalizeNonEmptyString(p.product_model_name_fi),
+          product_model_name_sv: normalizeNonEmptyString(p.product_model_name_sv),
+          name_en: normalizeNonEmptyString(p.product_name_en),
+          name_fi: normalizeNonEmptyString(p.product_name_fi),
+          name_sv: normalizeNonEmptyString(p.product_name_sv),
+          brand: normalizeNonEmptyString(p.brand),
+          vendor_name: normalizeNonEmptyString(p.vendor_name),
+          category_codes: normalizeCategoryCodesFromCsv(p.categories),
+          catalog_restriction: normalizeNonEmptyString(p.catalog_restriction),
+        });
+      }, log);
     }
 
+    log.info(`Built model metadata for ${modelMetadataByCode.size} parent rows`);
 
+    // -----------------------------------------------------------------------
+    // Step 5 (Pass 2): Stream products again, enrich + validate + filter each
+    // row, and flush to the DB in batches of PRODUCT_BATCH_SIZE.
+    //
+    // Accumulators that must span the full file (model truth, eligible model
+    // set, variant counts) are kept as lightweight Maps/Sets of strings/numbers
+    // rather than full row objects.
+    // -----------------------------------------------------------------------
 
-    const isSellableParentRow = (p: any): boolean => {
-      const productCode = normalizeNonEmptyString(p.product_code);
-      if (!productCode) return false;
-
-      const hasName = normalizeNonEmptyString(p.product_name_en);
-      const hasBrand = normalizeNonEmptyString(p.brand);
-      const hasVendor = normalizeNonEmptyString(p.vendor_name);
-      const hasCategories = normalizeCategoryCodesFromCsv(p.categories).length > 0;
-      const barcode = normalizeNonEmptyString(p.barcode);
-      const hasBarcode = typeof barcode === 'string' && /^\d+$/.test(barcode);
-
-      const price = priceMap.get(productCode);
-      const stock = stockMap.get(productCode);
-      const image = imageMap.get(productCode);
-
-      return Boolean(hasName && hasBrand && hasVendor && hasCategories && hasBarcode && price && stock && image);
-    };
-
-    const sellableParentRows = parentRows.filter(isSellableParentRow);
-    const rowsToEnrich = [...variantRows, ...sellableParentRows];
-
-    if (sellableParentRows.length > 0) {
-      log.debug(`Included ${sellableParentRows.length} sellable parent rows as variants`);
-    }
-
-    const validatedProducts = rowsToEnrich.map((product) => {
-      const price = priceMap.get(product.product_code);
-      const stock = stockMap.get(product.product_code);
-      const image = imageMap.get(product.product_code);
-      return validator.enrichProduct(product, price, stock, image ? { IMAGE_URL: image.IMAGE_URL } : undefined);
-    });
-    log.info(`Enriched ${validatedProducts.length} variants`);
-
-    logBoundarySample('post-validate:validated_products', validatedProducts as any, undefined, log);
-
-    // Step 6: Reject inconsistent models (brand/vendor/category mismatch)
+    // Helpers for model-consistency check (same logic as before, inline)
     type ModelTruth = { brand: string; vendor: string; categoryKey: string };
     const toTruthKey = (codes: any): string => {
       const normalized = normalizeCategoryCodes(codes).map((c) => c.toLowerCase());
       return normalized.join('|');
     };
     const truthFromMeta = (meta: any): ModelTruth | null => {
-      const brand = normalizeNonEmptyString(meta?.brand)?.toLowerCase() ?? '';
-      const vendor = normalizeNonEmptyString(meta?.vendor_name)?.toLowerCase() ?? '';
+      const brand       = normalizeNonEmptyString(meta?.brand)?.toLowerCase()       ?? '';
+      const vendor      = normalizeNonEmptyString(meta?.vendor_name)?.toLowerCase() ?? '';
       const categoryKey = toTruthKey(meta?.category_codes);
       if (brand === '' || vendor === '' || categoryKey === '') return null;
       return { brand, vendor, categoryKey };
     };
     const truthFromVariant = (v: any): ModelTruth | null => {
-      const brand = normalizeNonEmptyString(v?.brand)?.toLowerCase() ?? '';
-      const vendor = normalizeNonEmptyString(v?.vendor_name)?.toLowerCase() ?? '';
+      const brand       = normalizeNonEmptyString(v?.brand)?.toLowerCase()       ?? '';
+      const vendor      = normalizeNonEmptyString(v?.vendor_name)?.toLowerCase() ?? '';
       const categoryKey = toTruthKey(v?.category_codes);
       if (brand === '' || vendor === '' || categoryKey === '') return null;
       return { brand, vendor, categoryKey };
     };
 
-    const variantsByModel = new Map<string, any[]>();
-    for (const v of validatedProducts) {
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      const arr = variantsByModel.get(modelCode) ?? [];
-      arr.push(v);
-      variantsByModel.set(modelCode, arr);
-    }
-
+    // Pre-build truth map from model metadata (parent rows already scanned)
     const truthByModelCode = new Map<string, ModelTruth>();
     for (const [modelCode, meta] of modelMetadataByCode) {
       const t = truthFromMeta(meta);
       if (t) truthByModelCode.set(modelCode, t);
     }
-    for (const [modelCode, variants] of variantsByModel) {
-      if (truthByModelCode.has(modelCode)) continue;
-      for (const v of variants) {
-        const t = truthFromVariant(v);
-        if (t) {
-          truthByModelCode.set(modelCode, t);
-          break;
+
+    // Determine if a parent row is "sellable" (has price + stock + image + required fields)
+    const isSellableParentRow = (p: any): boolean => {
+      const productCode = normalizeNonEmptyString(p.product_code);
+      if (!productCode) return false;
+      const hasName       = normalizeNonEmptyString(p.product_name_en);
+      const hasBrand      = normalizeNonEmptyString(p.brand);
+      const hasVendor     = normalizeNonEmptyString(p.vendor_name);
+      const hasCategories = normalizeCategoryCodesFromCsv(p.categories).length > 0;
+      const barcode       = normalizeNonEmptyString(p.barcode);
+      const hasBarcode    = typeof barcode === 'string' && /^\d+$/.test(barcode);
+      const price         = priceMap.get(productCode);
+      const stock         = stockMap.get(productCode);
+      const image         = imageMap.get(productCode);
+      return Boolean(hasName && hasBrand && hasVendor && hasCategories && hasBarcode && price && stock && image);
+    };
+
+    // Streaming state
+    let droppedVariants = 0;
+    const droppedModelCodes    = new Set<string>();
+    const eligibleModelSet     = new Set<string>();
+    const validVariantCountByModel = new Map<string, number>();
+
+    // Batch accumulators — flushed every PRODUCT_BATCH_SIZE rows
+    let stagingProductBatch: any[]  = [];
+    let stagingPriceBatch:   any[]  = [];
+    let stagingStockBatch:   any[]  = [];
+    let stagingImageBatch:   any[]  = [];
+    let variantBatch:        any[]  = [];
+
+    let totalProductRows = 0;
+    let totalEnriched    = 0;
+
+    const modelLimit = config.pipelineModelLimit;
+
+    const flushBatch = async (): Promise<void> => {
+      if (stagingProductBatch.length === 0) return;
+
+      if (stagingProductBatch.length > 0) await insertProductsStaging(stagingProductBatch);
+      if (stagingPriceBatch.length   > 0) await insertPricesStaging(stagingPriceBatch);
+      if (stagingStockBatch.length   > 0) await insertStockStaging(stagingStockBatch, 'product_code');
+      if (stagingImageBatch.length   > 0) await insertImagesStaging(stagingImageBatch);
+      if (variantBatch.length        > 0) await promoteToProduction(variantBatch, { modelMetadataByCode });
+
+      stagingProductBatch = [];
+      stagingPriceBatch   = [];
+      stagingStockBatch   = [];
+      stagingImageBatch   = [];
+      variantBatch        = [];
+    };
+
+    if (fs.existsSync(productsPath)) {
+      await parseProductsCsv(productsPath, async (rawRow) => {
+        normalizeHyphenKeysInPlace(rawRow);
+        totalProductRows++;
+
+        const parent = normalizeNonEmptyString(rawRow.parent);
+        const isVariantRow = Boolean(parent);
+        const isSellableParent = !isVariantRow && isSellableParentRow(rawRow);
+
+        // Only process rows that are either variants or sellable parents
+        if (!isVariantRow && !isSellableParent) return;
+
+        const productCode = normalizeNonEmptyString(rawRow.product_code);
+        if (!productCode) return;
+
+        // Apply model cap: skip rows whose model is already capped out
+        const modelCode = isVariantRow
+          ? (normalizeNonEmptyString(rawRow.parent) ?? productCode)
+          : productCode;
+
+        if (modelLimit > 0 && eligibleModelSet.size >= modelLimit) {
+          // Only allow rows belonging to already-eligible models
+          if (!eligibleModelSet.has(modelCode)) return;
         }
-      }
+
+        const price = priceMap.get(productCode);
+        const stock = stockMap.get(productCode);
+        const image = imageMap.get(productCode);
+
+        const enriched = validator.enrichProduct(
+          rawRow,
+          price,
+          stock,
+          image ? { IMAGE_URL: image.IMAGE_URL } : undefined,
+        );
+        totalEnriched++;
+
+        // Model-consistency check
+        const truth = truthByModelCode.get(modelCode);
+        if (truth) {
+          const vt = truthFromVariant(enriched);
+          if (vt && (vt.brand !== truth.brand || vt.vendor !== truth.vendor || vt.categoryKey !== truth.categoryKey)) {
+            droppedVariants++;
+            droppedModelCodes.add(modelCode);
+            return;
+          }
+        } else {
+          // First time we see this model from a variant — register its truth
+          const vt = truthFromVariant(enriched);
+          if (vt) truthByModelCode.set(modelCode, vt);
+        }
+
+        // Filter check
+        const passes = productFilter.filterProducts([enriched]).length > 0;
+
+        if (passes) {
+          eligibleModelSet.add(modelCode);
+        }
+
+        // Track valid variant count for model ordering (used in cap logic)
+        if (Array.isArray(enriched.errors) && enriched.errors.length === 0) {
+          validVariantCountByModel.set(modelCode, (validVariantCountByModel.get(modelCode) ?? 0) + 1);
+        }
+
+        // Accumulate into staging + production batches
+        stagingProductBatch.push(rawRow);
+        if (price) stagingPriceBatch.push(price);
+        if (stock) stagingStockBatch.push(stock);
+        if (image) stagingImageBatch.push(image);
+        variantBatch.push(enriched);
+
+        // Flush when batch is full
+        if (stagingProductBatch.length >= PRODUCT_BATCH_SIZE) {
+          await flushBatch();
+        }
+      }, log);
     }
 
-    let droppedVariants = 0;
-    const droppedModelCodes = new Set<string>();
-    const consistentValidatedVariants = validatedProducts.filter((v) => {
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      const truth = truthByModelCode.get(modelCode);
-      if (!truth) return true;
-      const vt = truthFromVariant(v);
-      if (!vt) return true;
-      if (vt.brand !== truth.brand || vt.vendor !== truth.vendor || vt.categoryKey !== truth.categoryKey) {
-        droppedVariants += 1;
-        droppedModelCodes.add(modelCode);
-        return false;
-      }
-      return true;
-    });
+    // Flush any remaining rows
+    await flushBatch();
 
     if (droppedVariants > 0) {
       log.warn(`Dropped ${droppedVariants} variants conflicting with model truth (${droppedModelCodes.size} models affected)`);
     }
 
-    // Step 7: Determine model eligibility via qualifying variants (stock_total > 1)
-    const filterStats = productFilter.getFilterStats(consistentValidatedVariants);
+    log.info(`Streamed ${totalProductRows} product rows, enriched ${totalEnriched} variants`);
 
-    const qualifyingVariants = productFilter.filterProducts(consistentValidatedVariants);
-    log.info(`Filter: ${qualifyingVariants.length} / ${consistentValidatedVariants.length} variants passed (${filterStats.passRate.toFixed(1)}%)`);
+    pipelineModels   = modelLimit > 0 ? Math.min(eligibleModelSet.size, modelLimit) : eligibleModelSet.size;
+    pipelineVariants = totalEnriched - droppedVariants;
 
-    // Step 8: Eligible models are those with >= 1 qualifying variant, then cap by model count
-    const eligibleModelSet = new Set<string>();
-    for (const v of qualifyingVariants) {
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      eligibleModelSet.add(modelCode);
-    }
-
-    const validVariantCountByModel = new Map<string, number>();
-    for (const v of consistentValidatedVariants) {
-      if (!Array.isArray(v.errors) || v.errors.length !== 0) continue;
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      validVariantCountByModel.set(modelCode, (validVariantCountByModel.get(modelCode) ?? 0) + 1);
-    }
-
-    const eligibleModelOrder = Array.from(eligibleModelSet).sort((a, b) => {
-      const da = validVariantCountByModel.get(a) ?? 0;
-      const db = validVariantCountByModel.get(b) ?? 0;
-      if (db !== da) return db - da;
-      return a.localeCompare(b);
-    });
-
-    const variantsToPromote = consistentValidatedVariants.filter((v) => {
-      if (!Array.isArray(v.errors) || v.errors.length !== 0) return false;
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      return eligibleModelSet.has(modelCode);
-    });
-
-    const modelLimit = config.pipelineModelLimit;
-    const cappedModelCodes = modelLimit > 0
-      ? eligibleModelOrder.slice(0, modelLimit)
-      : eligibleModelOrder;
-    const cappedModelCodeSet = new Set<string>(cappedModelCodes);
-    const cappedVariantsToPromote = variantsToPromote.filter((v) => {
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      return cappedModelCodeSet.has(modelCode);
-    });
-
-    pipelineModels = cappedModelCodes.length;
-    pipelineVariants = cappedVariantsToPromote.length;
     if (modelLimit > 0) {
-      log.info(`Applied model cap: ${pipelineModels} models, ${pipelineVariants} variants (limit: ${modelLimit})`);
+      log.info(`Applied model cap: ${pipelineModels} models (limit: ${modelLimit})`);
     } else {
       log.info(`No model cap (prod): ${pipelineModels} models, ${pipelineVariants} variants`);
     }
-
-    // Step 9: Filter related data to match only the selected variant SKUs
-    const cappedProductCodes = new Set(cappedVariantsToPromote.map((v) => v.product_code));
-    const cappedRawProducts = products.filter((p) => cappedProductCodes.has(p.product_code));
-    const cappedPrices = prices.filter((p) => cappedProductCodes.has(p.PRODUCT_CODE));
-    const cappedStockProduct = stockProduct.filter((s) => typeof s.PRODUCT_CODE === 'string' && cappedProductCodes.has(s.PRODUCT_CODE));
-    const cappedImages = images.filter((i) => cappedProductCodes.has(i.PRODUCT_CODE));
-
-
-
-    // Step 10: Insert ONLY filtered data to staging (not all 127k variants!)
-    if (config.dev.cleanSlate) {
-      await clearStagingTablesForDev();
-    }
-    if (cappedRawProducts.length > 0) await insertProductsStaging(cappedRawProducts);
-    if (cappedPrices.length > 0) await insertPricesStaging(cappedPrices);
-    if (cappedStockProduct.length > 0) await insertStockStaging(cappedStockProduct, 'product_code');
-    if (categories.length > 0) await insertCategories(categories);
-    if (categoryHierarchy.length > 0) await insertCategoryHierarchy(categoryHierarchy);
-    if (cappedImages.length > 0) await insertImagesStaging(cappedImages);
-
-    // Step 11: Promote filtered variants to normalized production tables
-    const cappedModelMetadataByCode = new Map<string, any>();
-    for (const modelCode of cappedModelCodes) {
-      const meta = modelMetadataByCode.get(modelCode);
-      if (meta) cappedModelMetadataByCode.set(modelCode, meta);
-    }
-
-    await promoteToProduction(cappedVariantsToPromote, {
-      modelMetadataByCode: cappedModelMetadataByCode,
-    });
 
     if (config.dev.cleanSlate) {
       await clearProductionProductsForDev();
       await clearStagingTablesForDev();
     }
-
-    logBoundarySample('pre-store-sync:products', cappedVariantsToPromote as any, { maxStringLen: 80 }, log);
 
     log.info('Pipeline completed successfully');
 

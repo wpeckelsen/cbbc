@@ -36,15 +36,35 @@ export interface ProductRecord {
   [key: string]: any;
 }
 
-export async function parseProductsCsv(filePath: string, log: Logger = defaultLogger): Promise<ProductRecord[]> {
-  const results: ProductRecord[] = [];
+/**
+ * Stream the products CSV, invoking `onRow` for each parsed row.
+ * Rows are never accumulated in memory — the caller is responsible for
+ * batching / discarding rows as needed.
+ */
+export async function parseProductsCsv(
+  filePath: string,
+  onRow: (row: ProductRecord) => Promise<void>,
+  log: Logger = defaultLogger,
+): Promise<void> {
+  let count = 0;
   return new Promise((resolve, reject) => {
-    fs.createReadStream(filePath)
-      .pipe(csv({ separator: ';' }))
-      .on('data', (data: any) => results.push(data))
+    const stream = fs.createReadStream(filePath).pipe(csv({ separator: ';' }));
+
+    stream
+      .on('data', async (data: any) => {
+        stream.pause();
+        try {
+          await onRow(data);
+          count++;
+        } catch (err) {
+          stream.destroy(err as Error);
+          return;
+        }
+        stream.resume();
+      })
       .on('end', () => {
-        log.info(`Parsed products CSV (${results.length} rows)`);
-        resolve(results);
+        log.info(`Streamed products CSV (${count} rows)`);
+        resolve();
       })
       .on('error', (error) => {
         log.error({ filePath, error: error.message }, 'Failed to parse products CSV');
@@ -69,15 +89,25 @@ export interface PriceRecord {
   [key: string]: any;
 }
 
-export async function parsePricesCsv(filePath: string, log: Logger = defaultLogger): Promise<PriceRecord[]> {
-  const results: PriceRecord[] = [];
+/**
+ * Load the entire prices CSV into a Map keyed by PRODUCT_CODE.
+ * Prices are a compact lookup table (one row per SKU, ~10 numeric fields)
+ * and must be fully resident in memory before products are streamed.
+ */
+export async function parsePricesCsv(
+  filePath: string,
+  log: Logger = defaultLogger,
+): Promise<Map<string, PriceRecord>> {
+  const map = new Map<string, PriceRecord>();
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
-      .on('data', (data: any) => results.push(data))
+      .on('data', (data: PriceRecord) => {
+        if (data.PRODUCT_CODE) map.set(data.PRODUCT_CODE, data);
+      })
       .on('end', () => {
-        log.info(`Parsed prices CSV (${results.length} rows)`);
-        resolve(results);
+        log.info(`Parsed prices CSV (${map.size} rows)`);
+        resolve(map);
       })
       .on('error', (error) => {
         log.error({ filePath, error: error.message }, 'Failed to parse prices CSV');
@@ -95,15 +125,27 @@ export interface StockRecord {
   [key: string]: any;
 }
 
-export async function parseStockCsv(filePath: string, source: 'product_code' | 'ean', log: Logger = defaultLogger): Promise<StockRecord[]> {
-  const results: StockRecord[] = [];
+/**
+ * Load the entire stock CSV into a Map keyed by PRODUCT_CODE (or EAN).
+ * Stock is a compact lookup table and must be fully resident in memory
+ * before products are streamed.
+ */
+export async function parseStockCsv(
+  filePath: string,
+  source: 'product_code' | 'ean',
+  log: Logger = defaultLogger,
+): Promise<Map<string, StockRecord>> {
+  const map = new Map<string, StockRecord>();
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
-      .on('data', (data: any) => results.push(data))
+      .on('data', (data: StockRecord) => {
+        const key = source === 'product_code' ? data.PRODUCT_CODE : data.EAN;
+        if (key) map.set(key, data);
+      })
       .on('end', () => {
-        log.info(`Parsed stock CSV [${source}] (${results.length} rows)`);
-        resolve(results);
+        log.info(`Parsed stock CSV [${source}] (${map.size} rows)`);
+        resolve(map);
       })
       .on('error', (error) => {
         log.error({ filePath, source, error: error.message }, 'Failed to parse stock CSV');
@@ -165,15 +207,25 @@ export interface ImageRecord {
   IMAGE_NAME: string;
 }
 
-export async function parseImagesCsv(filePath: string, log: Logger = defaultLogger): Promise<ImageRecord[]> {
-  const results: ImageRecord[] = [];
+/**
+ * Load the entire images CSV into a Map keyed by PRODUCT_CODE.
+ * Images are a compact lookup table and must be fully resident in memory
+ * before products are streamed.
+ */
+export async function parseImagesCsv(
+  filePath: string,
+  log: Logger = defaultLogger,
+): Promise<Map<string, ImageRecord>> {
+  const map = new Map<string, ImageRecord>();
   return new Promise((resolve, reject) => {
     fs.createReadStream(filePath)
       .pipe(csv({ separator: ';' }))
-      .on('data', (data: any) => results.push(data))
+      .on('data', (data: ImageRecord) => {
+        if (data.PRODUCT_CODE) map.set(data.PRODUCT_CODE, data);
+      })
       .on('end', () => {
-        log.info(`Parsed images CSV (${results.length} rows)`);
-        resolve(results);
+        log.info(`Parsed images CSV (${map.size} rows)`);
+        resolve(map);
       })
       .on('error', (error) => {
         log.error({ filePath, error: error.message }, 'Failed to parse images CSV');
