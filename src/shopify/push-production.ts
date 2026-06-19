@@ -356,21 +356,22 @@ async function upsertModel(
   });
 }
 
-// Optional weekly schedule (e.g. SHOPIFY_PUSH_CRON='0 3 * * 1' = Mon 03:00).
-// Disabled by default — the push runs manually via `npm run shopify:push:prod`.
-if (config.nodeEnv !== 'test' && config.shopify.pushCron) {
-  cron.schedule(config.shopify.pushCron, async () => {
-    try {
-      await runShopifyPush();
-    } catch (error) {
-      const err = error as Error;
-      logger.error({ error: err.message }, 'Scheduled Shopify push failed');
-    }
-  });
-  logger.info(`Shopify push cron scheduled (${config.shopify.pushCron})`);
-}
-
+// When run directly (npm run shopify:push:prod), register its own cron and
+// run immediately.  When imported by worker.ts, skip — the worker handles
+// cron registration and invocation to avoid double-scheduling.
 if (require.main === module) {
+  if (config.nodeEnv !== 'test' && config.shopify.pushCron) {
+    cron.schedule(config.shopify.pushCron, async () => {
+      try {
+        await runShopifyPush();
+      } catch (error) {
+        const err = error as Error;
+        logger.error({ error: err.message }, 'Scheduled Shopify push failed');
+      }
+    });
+    logger.info(`Shopify push cron scheduled (${config.shopify.pushCron})`);
+  }
+
   runShopifyPush().catch((error) => {
     const err = error as Error;
     logger.error({ error: err.message, stack: err.stack }, 'Shopify production push failed');
