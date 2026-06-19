@@ -11,6 +11,7 @@ import { logBoundarySample } from './utils/pipeline-debug';
 import { RunContext } from './logging';
 import { checkDrift } from './db/drift-check';
 import { DatabaseClient } from './api/db-client';
+import { runShopifyPush } from './shopify/push-production';
 import fs from 'fs';
 import path from 'path';
 
@@ -387,6 +388,11 @@ async function runPipeline(): Promise<void> {
     await run.finish('success', {
       summary: { models: pipelineModels, variants: pipelineVariants },
     });
+    // In dev mode, automatically run Shopify push after pipeline completes
+    if (!config.isProd) {
+      log.info('Dev mode: starting Shopify push after pipeline');
+      await runShopifyPush();
+    }
   } catch (error) {
     const err = error as Error;
     log.error({ error: err.message, stack: err.stack }, 'Pipeline failed');
@@ -397,8 +403,8 @@ async function runPipeline(): Promise<void> {
   }
 }
 
-// Schedule the job
-if (config.nodeEnv !== 'test') {
+// Schedule cron jobs only in prod — dev runs immediately on boot instead.
+if (config.nodeEnv !== 'test' && config.isProd) {
   cron.schedule(config.cron.schedule, async () => {
     try {
       await runPipeline();
@@ -407,7 +413,19 @@ if (config.nodeEnv !== 'test') {
       logger.error('Scheduled job failed', { error: err.message });
     }
   });
-  logger.info('Cron job scheduled', { schedule: config.cron.schedule });
+  logger.info('Pipeline cron scheduled', { schedule: config.cron.schedule });
+
+  if (config.shopify.pushCron) {
+    cron.schedule(config.shopify.pushCron, async () => {
+      try {
+        await runShopifyPush();
+      } catch (error) {
+        const err = error as Error;
+        logger.error('Scheduled Shopify push failed', { error: err.message });
+      }
+    });
+    logger.info('Shopify push cron scheduled', { schedule: config.shopify.pushCron });
+  }
 }
 
 // Run immediately only in dev or when explicitly requested via RUN_ON_STARTUP=true.
