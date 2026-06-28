@@ -1,213 +1,215 @@
-# Technical overview: CBBC product pipeline
+# Technical Overview
 
-## Purpose
+Deep dive into data flow, table structure, filtering logic, and Shopify mapping.
 
-This service ingests a supplier product feed (Duell FTP CSV exports), normalizes and validates it, selects a capped subset of “good” products, and writes both staging and production-ready tables in PostgreSQL. A separate Shopify integration pushes the promoted catalogue (models + variants) to a Shopify storefront.
+For operational guidance (how to run, deploy, configure), see [PIPELINE_GUIDE.md](./PIPELINE_GUIDE.md).
 
-## Tech stack
+---
 
-- **Runtime**: Node.js (see `package.json`, engine `>=20`)
-- **Language**: TypeScript
-- **Scheduling**: `node-cron`
-- **FTP**: `basic-ftp`
-- **CSV parsing**: `csv-parser`
-- **Logging**: `pino` + `pino-pretty`
-- **Database access**: PostgreSQL via `pg` — a shared connection pool (`src/api/db-client.ts`) for all CRUD and `src/db/migrate.ts` + `src/db/schema-preflight.ts` for migrations and schema introspection
-- **Containerization**: Docker (`Dockerfile`, `docker-compose.yml`)
+## Entrypoints
 
-## Main entrypoints
+| File | Role |
+|------|------|
+| `src/worker.ts` | Main entrypoint. Orchestrates the full pipeline: FTP download → parse → enrich → filter → cap → staging → promotion. In prod, registers cron. In dev, runs on boot then triggers Shopify push. |
+| `src/shopify/push-production.ts` | Shopify push. Reads promoted data from DB and syncs to Shopify. Can run standalone (`npm run shopify:push:prod`) or is called by `worker.ts` in dev mode. |
 
-- **Pipeline worker**: `src/worker.ts`
-- **DB operations / promotion logic**: `src/api/products-api.ts`
-- **PostgreSQL client**: `src/api/db-client.ts`
-- **Validation + enrichment**: `src/validation/product-validator.ts`
-- **Filtering**: `src/filters/product-filter.ts`
-- **Shopify push script**: `src/shopify/push-production.ts` (`npm run shopify:push:prod`)
-- **Shopify GraphQL client**: `src/shopify/shopify-client.ts`
-- **Production → Shopify mappers**: `src/shopify/mappers.ts`
+## Module map
 
-## Data flow (authoritative)
+| Path | Responsibility |
+|------|----------------|
+| `config/env.ts` | Central configuration from env vars. Controls all dev/prod behavior switches. |
+| `ftp/ftp-client.ts` | FTP connect, download with retry/backoff, on-disk caching (`cache/ftp/`). |
+| `parsers/csv-parser.ts` | Per-file CSV parsers (semicolon-delimited). Returns typed arrays. |
+| `validation/product-validator.ts` | `enrichProduct()` — joins a product row with its price/stock/image, produces `ValidatedProduct` with `errors[]`. |
+| `filters/product-filter.ts` | Generic filter; effective rules injected from `worker.ts` via `customLogic`. |
+| `api/db-client.ts` | PostgreSQL client wrapping `pg.Pool`. Provides `insert`, `upsert`, `select`, `delete`. Registers NUMERIC type parser (OID 1700 → `parseFloat`). |
+| `api/products-api.ts` | Staging inserts, `promoteToProduction()`, store-link bookkeeping, promoted-catalogue reads. ~1k lines. |
+| `db/migrate.ts` | Applies pending SQL migrations from `migrations/sql/`. |
+| `db/migration-utils.ts` | Shared utilities: `createClient`, `listMigrationFiles`, `getAppliedMigrations`. |
+| `db/schema-preflight.ts` | Introspects live table columns, drops keys not in the schema before writes. |
+| `db/drift-check.ts` | Compares migration files on disk vs. `schema_migrations` table. |
+| `db/reset-remote.ts` | Drops all public schema objects and re-runs migrations. Guarded by `NODE_ENV=development` + `CONFIRM_NUKE=YES`. |
+| `shopify/shopify-client.ts` | Shopify GraphQL Admin client with throttle-aware retry. |
+| `shopify/mappers.ts` | Maps production DB rows → Shopify `ProductSetInput`. |
+| `shopify/content-hash.ts` | Computes content hashes to skip unchanged models during push. |
+| `utils/pipeline-debug.ts` | `logBoundarySample()` — logs sample records at pipeline boundaries when `LOG_LEVEL=debug`. |
+| `logging/run-context.ts` | `RunContext` — per-run logger with unique run ID and timing. |
 
-### 1) FTP download
+---
 
-Implemented in `src/worker.ts` using `FtpClient`.
+## Data flow (pipeline steps)
 
-The worker downloads into a persistent cache directory so subsequent runs can reuse files:
+### 1. FTP download
 
-- Local cache: `cache/ftp/` (under the repo)
+Downloads 6 CSV files into `cache/ftp/`:
 
-Files downloaded by the worker today:
+| Remote path | Local filename |
+|-------------|---------------|
+| `/Data/Products/products.csv` | `products.csv` |
+| `/Retail_pricelist.csv` | `prices.csv` |
+| `/ic_CSV.csv` | `stock_product.csv` |
+| `/Data/product_category_descriptions.csv` | `categories.csv` |
+| `/Data/product_category_hierarchy.csv` | `category_hierarchy.csv` |
+| `/Data/product_images.csv` | `images.csv` |
 
-- `/Data/Products/products.csv` -> `products.csv`
-- `/Retail_pricelist.csv` -> `prices.csv`
-- `/ic_CSV.csv` -> `stock_product.csv`
-- `/Data/product_category_descriptions.csv` -> `categories.csv`
-- `/Data/product_category_hierarchy.csv` -> `category_hierarchy.csv`
-- `/Data/product_images.csv` -> `images.csv`
+In dev mode, cached files are reused across runs. In prod mode, cache is cleared at the start of each run.
 
-Note: a stock-by-EAN file exists in the supplier docs, and is used in `test-pipeline.ts`, but is not currently downloaded in `src/worker.ts`.
+### 2. Parse CSV
 
-### 2) Parse CSV
+Each file is parsed via streaming `csv-parser` (semicolon delimiter) into typed arrays. Missing files are skipped with a warning.
 
-Parsing functions live in `src/parsers/csv-parser.ts` and yield arrays of records like:
+### 3. Normalize keys
 
-- `products[]`
-- `prices[]`
-- `stock_product[]`
-- `categories[]`
-- `category_hierarchy[]`
-- `images[]`
+Supplier column names containing hyphens are normalized: `product-code` → `product_code` (in-place on each record).
 
-### 3) Normalize supplier key quirks
+### 4. Build lookup maps
 
-In `src/worker.ts` the pipeline normalizes supplier column names that contain hyphens by replacing `-` with `_` (in-place).
+Prices, stock, and images are indexed into `Map<product_code, record>` for O(1) joins during enrichment.
 
-### 4) Enrich into canonical validated products (variants)
+### 5. Split parent vs. variant rows
 
-Validation and enrichment is performed by `ProductValidator.enrichProduct()`.
+The products CSV contains two types of rows:
+- **Parent rows** (`parent` field empty): represent the model/group. Used for model-level metadata.
+- **Variant rows** (`parent` field = model code): represent sellable SKUs.
 
-Core behavior:
+Parent rows that are "sellable" (have barcode, price, stock, image, name, brand, vendor, categories) are also treated as variants.
 
-- Each product row is joined (in-memory) to:
-  - a price row by product code
-  - a stock row by product code
-  - an image row by product code
-- `model_code` is derived as:
-  - `parent` when `parent` is present
-  - otherwise `product_code`
+`modelMetadataByCode` is built from parent rows — stores model-level names, brand, vendor, categories.
 
-### 5) Model/variant reconstruction (parent-preferred metadata)
+### 6. Enrich + validate
 
-The supplier feed includes both:
+Each variant row is joined with its price, stock, and image via the lookup maps. `ProductValidator.enrichProduct()` produces a `ValidatedProduct` with:
+- Computed fields: `model_code`, `price_eur_excl_vat`, `stock_total`, `image_url`, `barcode`
+- `errors[]`: list of validation failures
 
-- **Parent rows**: `parent` empty; represent the model
-- **Variant rows**: `parent` non-empty; represent sellable SKUs
+### 7. Model consistency check
 
-The worker:
+For each model code, a "truth" is established (brand, vendor, category_codes) — preferring parent metadata when available, falling back to the first variant.
 
-- Splits the products feed into parent vs variant rows.
-- Builds a `modelMetadataByCode` map from parent rows.
-- Treats “sellable parent rows” as variants as well (only when they are complete enough to be sellable).
+Variants whose brand/vendor/categories conflict with their model truth are dropped.
 
-Consistency enforcement:
+### 8. Filter for eligibility
 
-- For each model code, the pipeline establishes a “model truth” (brand/vendor/category) preferring parent metadata when present.
-- Variants that conflict with that truth are dropped.
+A variant qualifies when:
+- `errors.length === 0`
+- `stock_total > 1`
+- Has `image_url`
+- Has `category_codes` (non-empty array)
+- Has `brand`
+- Has price and stock (required by filter config)
 
-### 6) Filtering and eligibility
+### 9. Cap by model count
 
-Filtering uses `ProductFilter` but the effective logic is set in `src/worker.ts` via `customLogic`.
+Eligible models = those with at least one qualifying variant.
 
-In practice, qualifying variants must:
+Sorting: by valid-variant count (descending), then by model code (ascending) for determinism.
 
-- Have no validation errors
-- Have stock total > 1
-- Have an image URL
-- Have categories
-- Have a brand
-- And satisfy `requiresPrice: true` and `requiresStock: true`.
+The top N models are kept (N = `PIPELINE_MODEL_LIMIT`; 0 = unlimited). All valid variants of selected models are promoted.
 
-The pipeline then computes **eligible models** as:
+### 10. Write staging tables
 
-- Any model that has at least 1 qualifying variant.
+Only data for the capped/selected product codes is written:
 
-### 7) Capping (current behavior)
+| Table | Method | Key |
+|-------|--------|-----|
+| `products_staging` | upsert | `product_code` |
+| `prices_staging` | upsert | `product_code` |
+| `stock_staging` | upsert | `product_code, source` |
+| `images_staging` | insert | — |
+| `categories` | upsert | `category_code` |
+| `category_hierarchy` | upsert | `category_code, parent_category_code` |
 
-The worker caps by model count:
+A schema preflight runs before writes: introspects the live table columns and drops any keys from the data that don't exist in the schema.
 
-- `MVP_MODEL_LIMIT = 50`
+### 11. Promote to production
 
-Algorithm:
+Creates/updates rows in:
+- `product_models` — one row per model code
+- `product_variants` — one row per product code, FK to `product_models.model_code`
 
-- Determine eligible model codes.
-- Sort eligible model codes by “valid variant count” (descending), then by model code (ascending) for deterministic behavior.
-- Keep the top 50 models.
-- Promote all valid variants belonging to those selected models.
+Model metadata is sourced from `modelMetadataByCode` (parent rows) when available, otherwise from the first representative variant.
 
-### 8) Write staging tables
+FK safety: variants are only written if their `model_code` exists in the promoted model set.
 
-Staging writes occur via the database client in `src/api/products-api.ts`:
+---
 
-- `products_staging` (upsert)
-- `prices_staging` (upsert)
-- `stock_staging` (insert)
-- `images_staging` (insert)
-- `categories` (upsert)
-- `category_hierarchy` (upsert)
+## Shopify push flow
 
-Notes:
+### Triggered by
 
-- `products_staging` uses an explicit allowlist of columns (`PRODUCTS_STAGING_COLUMNS`) to enforce the staging contract.
-- Writes also run a schema preflight that introspects the DB and drops unknown keys if the schema has changed (`src/db/schema-preflight.ts`).
+- **Dev mode**: automatically after pipeline completes (called from `worker.ts`)
+- **Prod mode**: on its own cron schedule (`SHOPIFY_PUSH_CRON`), registered by `worker.ts`
+- **Manual**: `npm run shopify:push:prod`
 
-### 9) Promote to production tables
+### Steps
 
-Promotion is implemented in `promoteToProduction()`.
+1. `getPromotedModelsWithVariants()` — reads `product_models` + `product_variants` (paginated), groups variants under their model. Respects `SHOPIFY_PUSH_MODEL_LIMIT`.
+2. For each model:
+   - Compute content hash of current data
+   - Compare against stored hash in `store_product_links`
+   - If unchanged and `SHOPIFY_FORCE_PUSH` is not set → skip
+   - Otherwise: `buildProductSetInput()` → `ShopifyClient.productSet()` (upsert product + variants)
+3. `setInventoryQuantities()` — writes stock to a single Shopify location per variant.
+4. Upserts into `store_product_links` / `store_variant_links` (maps model/variant → Shopify IDs).
+5. **Reconciliation**: models in link tables that are no longer in the promoted set → delete from Shopify, remove links.
 
-Current production tables:
+### Shopify field mapping
 
-- `product_models`
-- `product_variants`
-
-The promotion logic:
-
-- Rejects variants with validation errors.
-- Derives `model_code` for each variant.
-- Promotes:
-  - models (one per `model_code`)
-  - then variants (one per `product_code`)
-- Model metadata is built from:
-  - `modelMetadataByCode` (from parent rows) when present
-  - otherwise from the first representative variant
-
-Foreign-key safety:
-
-- Variants are filtered to only those whose `model_code` exists in the promoted model set.
-
-### 10) Observability / debug boundaries
-
-When `LOG_LEVEL=debug`, the pipeline logs “boundary samples” (keys + a sample record) at multiple points using `logBoundarySample()` in `src/utils/pipeline-debug.ts`.
-
-## Shopify integration
-
-A separate, manually-triggered step (`npm run shopify:push:prod`, optionally a weekly
-cron via `SHOPIFY_PUSH_CRON`) pushes the promoted catalogue to Shopify via the GraphQL
-Admin API.
-
-Flow (`src/shopify/push-production.ts`):
-
-1. `getPromotedModelsWithVariants()` reads `product_models` + `product_variants`
-   (paginated) and groups variants under their model.
-2. For each model, `buildProductSetInput()` maps it to a Shopify `ProductSetInput`
-   and `ShopifyClient.productSet()` upserts the product + all its variants in one call.
-3. Inventory is written per variant to a single location via `setInventoryQuantities()`.
-4. Local mappings are recorded in `store_product_links` / `store_variant_links`.
-5. **Reconciliation**: any model in the link tables that is no longer in the promoted
-   set has its Shopify product deleted and its links removed.
-
-Mapping rules:
-
-| Source (production) | Shopify |
+| Source (production DB) | Shopify field |
 |---|---|
-| `product_models.model_code` | product `handle` = `cbbc-{model_code}` + metafield `cbbc.model_code` |
-| `product_models.name_en` | product `title` |
-| `product_models.vendor_name` | product `vendor` (note: `brand` is dropped) |
-| `product_models.category_codes` | product `tags` |
-| `product_variants.product_code` | variant `sku` |
-| `product_variants.name_en` | variant option value (multi-variant models only; single-variant models use the default option) |
-| `product_variants.barcode` | variant `barcode` |
-| `product_variants.price_eur_excl_vat` | variant `price` (Shopify adds VAT) |
-| `product_variants.stock_total` | inventory quantity (single location) |
-| `product_variants.image_url` | product/variant media |
+| `product_models.model_code` | Product handle `cbbc-{model_code}` + metafield `cbbc.model_code` |
+| `product_models.name_en` | Product title |
+| `product_models.vendor_name` | Product vendor |
+| `product_models.category_codes` | Product tags |
+| `product_variants.product_code` | Variant SKU |
+| `product_variants.name_en` | Variant option value (multi-variant models); default option for single-variant |
+| `product_variants.barcode` | Variant barcode |
+| `product_variants.price_dkk_excl_vat` | Variant price (EUR → DKK at 7.47417, excl. VAT) |
+| `product_variants.stock_total` | Inventory quantity |
+| `product_variants.image_url` | Product/variant media |
 
-Idempotency: products are matched by the deterministic handle (and stored external
-id); variants by `sku`. `productSet` reconciles variants by SKU automatically, so a
-variant removed from a model's set is removed from the Shopify product.
+Products are matched by deterministic handle; variants by SKU. `productSet` reconciles variants automatically — a variant removed from a model's set is removed from the Shopify product.
 
-Bookkeeping tables (store-agnostic, migration `0006`): `store_product_links`,
-`store_variant_links`, `store_sync_logs`.
+---
 
-## Security / sanitization expectations
+## Database schema
 
-- Do not commit secrets. Configuration comes from environment variables (`src/config/env.ts`).
-- Documentation should refer to systems (Duell FTP, PostgreSQL, Shopify) but must not include credentials or sensitive URLs/tokens.
+All tables live in the `public` schema. Defined in `src/db/migrations/sql/0001_init.sql`.
+
+### Staging tables
+
+Written by the pipeline with capped/filtered supplier data.
+
+- **`products_staging`** — raw product attributes (codes, names, brand, vendor, categories, barcode). PK: `product_code`.
+- **`prices_staging`** — price per product code. PK: `product_code`.
+- **`stock_staging`** — stock levels per product code + source. PK: `(product_code, source)`.
+- **`images_staging`** — image URLs per product code.
+- **`categories`** — category code + descriptions. PK: `category_code`.
+- **`category_hierarchy`** — parent/child category relationships. PK: `(category_code, parent_category_code)`.
+
+### Production tables
+
+Normalized, promoted data — source of truth for Shopify.
+
+- **`product_models`** — one row per model. PK: `model_code`. Contains model-level name, brand, vendor, categories.
+- **`product_variants`** — one row per sellable SKU. PK: `product_code`. FK: `model_code` → `product_models`. Contains price (EUR + DKK), stock, barcode, image URL.
+
+### Store sync tables
+
+- **`store_product_links`** — maps `model_code` → Shopify product ID + handle + content hash.
+- **`store_variant_links`** — maps `product_code` → Shopify variant ID.
+- **`store_sync_logs`** — audit trail of push operations (timestamp, status, counts).
+
+### Migrations table
+
+- **`schema_migrations`** — tracks applied migration filenames + timestamps.
+
+---
+
+## Known limitations
+
+- **No automated tests.** The build (`tsc`) is the only safety net.
+- **Business logic concentrated in `worker.ts` (~435 lines) and `products-api.ts` (~1k lines).** Model/variant reconstruction, consistency checking, and capping are intertwined.
+- **Migrations are not auto-applied.** A fresh deploy without `npm run db:migrate` will fail on writes.
+- **Single Shopify location.** Inventory is written to one location only.
+- **Promotion upserts but does not prune stale rows.** If a variant was previously promoted but is no longer eligible, it stays in `product_variants` until the next push reconciliation removes it from Shopify. The DB row persists.
