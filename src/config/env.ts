@@ -30,9 +30,13 @@ export const config = {
     verbose: !isProd,
   },
   database: {
+    // Dev (local): use the public TCP proxy URL for external access.
+    // Prod (Railway): use the internal URL for fast, free connections.
     url:
-      process.env.DATABASE_PUBLIC_URL ||
-      process.env.DATABASE_URL ||
+      (isProd
+        ? (process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL)
+        : (process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL)
+      ) ||
       process.env.POSTGRES_URL ||
       '',
   },
