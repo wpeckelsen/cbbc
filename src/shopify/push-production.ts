@@ -77,6 +77,13 @@ export async function runShopifyPush(): Promise<PushSummary> {
     const locationId = await shopify.getLocationId();
     log.info(`Resolved Shopify inventory location (${locationId})`);
 
+    const publicationId = config.shopify.publicationId;
+    if (publicationId) {
+      log.info(`Will publish products to sales channel (${publicationId})`);
+    } else {
+      log.warn('SHOPIFY_PUBLICATION_ID not set — products will not be published to any sales channel');
+    }
+
     const [entries, existingLinks] = await Promise.all([
       getPromotedModelsWithVariants(),
       getAllStoreProductLinks(),
@@ -140,7 +147,7 @@ export async function runShopifyPush(): Promise<PushSummary> {
           }
         }
 
-        await upsertModel(entry, link?.external_product_id ?? null, locationId, hashes, summary, shopify, log);
+        await upsertModel(entry, link?.external_product_id ?? null, locationId, publicationId, hashes, summary, shopify, log);
       } catch (error) {
         summary.failed++;
         const err = error as Error;
@@ -239,7 +246,7 @@ async function syncInventoryOnly(
     const inventoryItemId = inventoryItemByCode.get(v.product_code);
     if (!inventoryItemId) {
       log.warn(`No inventory item id for SKU ${v.product_code} (model ${modelCode}) — falling back to full upsert`);
-      await upsertModel(entry, link.external_product_id, locationId, hashes, summary, shopify, log);
+      await upsertModel(entry, link.external_product_id, locationId, config.shopify.publicationId, hashes, summary, shopify, log);
       return;
     }
     inventoryUpdates.push({
@@ -278,6 +285,7 @@ async function upsertModel(
   entry: ModelWithVariants,
   knownProductId: string | null,
   locationId: string,
+  publicationId: string,
   hashes: ContentHashes,
   summary: PushSummary,
   shopify: ShopifyClient,
@@ -343,6 +351,10 @@ async function upsertModel(
   }
 
   await shopify.setInventoryQuantities(inventoryUpdates);
+
+  if (publicationId) {
+    await shopify.publishProduct(result.productId, publicationId);
+  }
 
   await updateModelSyncStatus(modelCode, new Date());
   summary.upserted++;

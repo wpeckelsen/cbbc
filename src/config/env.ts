@@ -47,6 +47,7 @@ export const config = {
     adminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || '',
     apiVersion: process.env.SHOPIFY_API_VERSION || '2024-10',
     locationId: process.env.SHOPIFY_LOCATION_ID || '',
+    publicationId: process.env.SHOPIFY_PUBLICATION_ID || '',
     pushCron: process.env.SHOPIFY_PUSH_CRON || '',
     forcePush: parseBooleanEnv(process.env.SHOPIFY_FORCE_PUSH, false),
     /** Max models to push per run. 0 = unlimited. Dev default: 5, prod: unlimited. */

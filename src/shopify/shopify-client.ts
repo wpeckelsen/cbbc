@@ -286,6 +286,36 @@ export class ShopifyClient {
   }
 
   /**
+   * Publish a product to a sales channel (e.g. Online Store).
+   * Requires the publication GID obtained from Shopify's `publications` query.
+   */
+  async publishProduct(productId: string, publicationId: string): Promise<void> {
+    if (!publicationId) return;
+
+    const data = await this.graphql<{
+      publishablePublish: {
+        userErrors: ShopifyUserError[];
+      };
+    }>(
+      `mutation PublishProduct($id: ID!, $input: [PublicationInput!]!) {
+        publishablePublish(id: $id, input: $input) {
+          userErrors { field message }
+        }
+      }`,
+      {
+        id: productId,
+        input: [{ publicationId }],
+      },
+    );
+
+    if (data.publishablePublish.userErrors.length > 0) {
+      throw new ShopifyError(
+        `publishablePublish userErrors: ${JSON.stringify(data.publishablePublish.userErrors)}`,
+      );
+    }
+  }
+
+  /**
    * Delete a product from the storefront.
    */
   async deleteProduct(productId: string): Promise<void> {
