@@ -27,6 +27,8 @@ const REQUIRED_SCOPES = [
   'read_locations',
   'read_products',
   'write_products',
+  'read_publications',
+  'write_publications',
 ].join(',');
 
 const CALLBACK_PORT = 3456;
