@@ -50,6 +50,14 @@ export const config = {
     publicationId: process.env.SHOPIFY_PUBLICATION_ID || '',
     pushCron: process.env.SHOPIFY_PUSH_CRON || '',
     forcePush: parseBooleanEnv(process.env.SHOPIFY_FORCE_PUSH, false),
+    /**
+     * One-shot backlog publish: when true, every linked product is (re)published
+     * to SHOPIFY_PUBLICATION_ID at the end of a push, regardless of content hash.
+     * Idempotent (already-published products are a no-op). Set this on the
+     * production worker to assign the Online Store channel to the existing
+     * catalogue on the next scheduled cron run, then turn it back off.
+     */
+    publishBacklog: parseBooleanEnv(process.env.SHOPIFY_PUBLISH_BACKLOG, false),
     /** Max models to push per run. 0 = unlimited. Dev default: 5, prod: unlimited. */
     pushModelLimit: parseInt(process.env.SHOPIFY_PUSH_MODEL_LIMIT || (isProd ? '0' : '5'), 10),
   },

@@ -30,6 +30,7 @@ type PushSummary = {
   deleted: number;
   failed: number;
   repaired: number;
+  backlogPublished: number;
 };
 
 /**
@@ -68,7 +69,7 @@ export async function runShopifyPush(): Promise<PushSummary> {
   const forcePush = config.shopify.forcePush;
   if (forcePush) log.warn('SHOPIFY_FORCE_PUSH is enabled — all models will be pushed regardless of content hash');
 
-  const summary: PushSummary = { upserted: 0, inventoryOnly: 0, skipped: 0, variantsSynced: 0, deleted: 0, failed: 0, repaired: 0 };
+  const summary: PushSummary = { upserted: 0, inventoryOnly: 0, skipped: 0, variantsSynced: 0, deleted: 0, failed: 0, repaired: 0, backlogPublished: 0 };
 
   try {
     // Pre-run: DB drift check
@@ -191,8 +192,19 @@ export async function runShopifyPush(): Promise<PushSummary> {
       }
     }
 
+    // --- One-shot backlog publish (SHOPIFY_PUBLISH_BACKLOG=true) ---
+    // Assigns the sales channel to products that never went through an upsert
+    // this run (skipped/inventory-only), e.g. the pre-existing catalogue.
+    if (config.shopify.publishBacklog) {
+      if (!publicationId) {
+        log.warn('SHOPIFY_PUBLISH_BACKLOG is set but SHOPIFY_PUBLICATION_ID is not — skipping backlog publish');
+      } else {
+        await publishBacklog(publicationId, summary, shopify, log);
+      }
+    }
+
     log.info(
-      `Shopify push complete (upserted: ${summary.upserted}, inventory-only: ${summary.inventoryOnly}, skipped: ${summary.skipped}, variants: ${summary.variantsSynced}, deleted: ${summary.deleted}, repaired: ${summary.repaired}, failed: ${summary.failed})`,
+      `Shopify push complete (upserted: ${summary.upserted}, inventory-only: ${summary.inventoryOnly}, skipped: ${summary.skipped}, variants: ${summary.variantsSynced}, deleted: ${summary.deleted}, repaired: ${summary.repaired}, backlog-published: ${summary.backlogPublished}, failed: ${summary.failed})`,
     );
 
     await run.finish('success', {
@@ -203,6 +215,7 @@ export async function runShopifyPush(): Promise<PushSummary> {
         variantsSynced: summary.variantsSynced,
         deleted: summary.deleted,
         repaired: summary.repaired,
+        backlogPublished: summary.backlogPublished,
         failed: summary.failed,
       },
     });
@@ -279,6 +292,44 @@ async function syncInventoryOnly(
     status: 'success',
     message: 'inventory-only',
   });
+}
+
+/**
+ * Publish every currently-linked product to the sales channel. Used as a
+ * one-shot backfill (gated by SHOPIFY_PUBLISH_BACKLOG) so the existing
+ * catalogue gets the Online Store channel assigned on a scheduled run without
+ * a manual/local invocation. Publishing an already-published product is a
+ * no-op on Shopify's side, so this is safe to leave on (just wasteful).
+ */
+async function publishBacklog(
+  publicationId: string,
+  summary: PushSummary,
+  shopify: ShopifyClient,
+  log: Logger,
+): Promise<void> {
+  const links = await getAllStoreProductLinks();
+  log.info(`Backlog publish: ensuring ${links.length} linked product(s) are on the sales channel (${publicationId})`);
+
+  for (const link of links) {
+    try {
+      await shopify.publishProduct(link.external_product_id, publicationId);
+      summary.backlogPublished++;
+    } catch (error) {
+      summary.failed++;
+      const err = error as Error;
+      log.error(`Backlog publish failed for ${link.model_code} (${link.external_product_id}): ${err.message}`);
+      await logStoreSync({
+        scope: 'product',
+        local_code: link.model_code,
+        external_id: link.external_product_id,
+        action: 'update',
+        status: 'failed',
+        message: `backlog-publish: ${err.message}`,
+      });
+    }
+  }
+
+  log.info(`Backlog publish complete (${summary.backlogPublished} published, ${summary.failed} failed)`);
 }
 
 async function upsertModel(
