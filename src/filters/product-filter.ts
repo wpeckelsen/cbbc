@@ -39,11 +39,11 @@ export class ProductFilter {
    */
   filterProducts(products: any[]): any[] {
     this.log.debug(`Filtering ${products.length} products`);
-    
+
     const filtered = products.filter(product => this.shouldIncludeProduct(product));
-    
+
     this.log.debug(`Filtered to ${filtered.length} products (${((filtered.length / products.length) * 100).toFixed(1)}% retained)`);
-    
+
     return filtered;
   }
 
@@ -78,7 +78,7 @@ export class ProductFilter {
     // Check category whitelist
     if (this.criteria.categories && this.criteria.categories.length > 0) {
       const productCategories = product.category_codes || [];
-      const hasMatchingCategory = productCategories.some((cat: string) => 
+      const hasMatchingCategory = productCategories.some((cat: string) =>
         this.criteria.categories!.includes(cat)
       );
       if (!hasMatchingCategory) {
@@ -204,4 +204,224 @@ export class ProductFilter {
     }
     return 'unknown';
   }
+}
+
+// ---------------------------------------------------------------------------
+// Unified variant eligibility (consolidates former gates 1, 2, and 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Single eligibility check for a validated variant, combining all checks that
+ * were previously scattered across `isSellableParentRow` (gate 1), the
+ * `customLogic` filter (gate 2), and the redundant guard inside
+ * `promoteToProduction` (gate 4).
+ *
+ * Returns `{ eligible: true }` or `{ eligible: false, reason: string }`.
+ */
+export function isVariantEligible(variant: any): { eligible: boolean; reason?: string } {
+  // Name (gates 1, 4)
+  const nameEn = typeof variant.name_en === 'string' ? variant.name_en.trim() : '';
+  if (nameEn === '') return { eligible: false, reason: 'no_name' };
+
+  // Brand (gates 1, 2)
+  const brand = typeof variant.brand === 'string' ? variant.brand.trim() : '';
+  if (brand === '') return { eligible: false, reason: 'no_brand' };
+
+  // Vendor (gate 1)
+  const vendorName = typeof variant.vendor_name === 'string' ? variant.vendor_name.trim() : '';
+  if (vendorName === '') return { eligible: false, reason: 'no_vendor' };
+
+  // Category codes (gates 1, 2)
+  const categoryCodes = variant.category_codes;
+  if (!Array.isArray(categoryCodes) || categoryCodes.length === 0) {
+    return { eligible: false, reason: 'no_categories' };
+  }
+
+  // Barcode (gates 1, 4)
+  const barcode = typeof variant.barcode === 'string' ? variant.barcode.trim() : '';
+  if (barcode === '' || !/^\d+$/.test(barcode)) {
+    return { eligible: false, reason: 'invalid_barcode' };
+  }
+
+  // Price (gates 1, 2, 4) — must be a positive number
+  const priceExcl = variant.price_eur_excl_vat;
+  if (typeof priceExcl !== 'number' || !Number.isFinite(priceExcl) || priceExcl <= 0) {
+    return { eligible: false, reason: 'no_price' };
+  }
+
+  // Price incl (gate 4) — must be a valid number
+  const priceIncl = variant.price_eur_incl_vat;
+  if (typeof priceIncl !== 'number' || !Number.isFinite(priceIncl)) {
+    return { eligible: false, reason: 'no_price' };
+  }
+
+  // Stock (gates 1, 2 — gate 2 requires > 1, which subsumes gate 1's
+  // existence check)
+  const stockTotal = variant.stock_total;
+  if (typeof stockTotal !== 'number' || !Number.isFinite(stockTotal) || stockTotal <= 1) {
+    return { eligible: false, reason: 'no_stock' };
+  }
+
+  // Image (gates 1, 2, 4)
+  const imageUrl = typeof variant.image_url === 'string' ? variant.image_url.trim() : '';
+  if (imageUrl === '') return { eligible: false, reason: 'no_image' };
+
+  // Validation errors (gate 2)
+  if (!Array.isArray(variant.errors) || variant.errors.length > 0) {
+    return { eligible: false, reason: 'validation_errors' };
+  }
+
+  return { eligible: true };
+}
+
+/**
+ * Compute summary statistics for a list of variants using the unified
+ * eligibility check.
+ */
+export function getEligibilityStats(variants: any[]): {
+  total: number;
+  eligible: number;
+  rejected: number;
+  passRate: number;
+  rejectionReasons: Record<string, number>;
+} {
+  const stats = {
+    total: variants.length,
+    eligible: 0,
+    rejected: 0,
+    passRate: 0,
+    rejectionReasons: {} as Record<string, number>,
+  };
+
+  for (const v of variants) {
+    const result = isVariantEligible(v);
+    if (result.eligible) {
+      stats.eligible++;
+    } else {
+      stats.rejected++;
+      const reason = result.reason ?? 'unknown';
+      stats.rejectionReasons[reason] = (stats.rejectionReasons[reason] ?? 0) + 1;
+    }
+  }
+
+  stats.passRate = stats.total > 0 ? (stats.eligible / stats.total) * 100 : 0;
+  return stats;
+}
+
+// ---------------------------------------------------------------------------
+// Model consistency filter (former gate 3)
+// ---------------------------------------------------------------------------
+
+export interface ModelTruth {
+  brand: string;
+  vendor: string;
+  categoryKey: string;
+}
+
+export interface ConsistencyResult {
+  kept: any[];
+  dropped: number;
+  droppedModelCodes: Set<string>;
+}
+
+/**
+ * Normalize an array of category codes: trim, deduplicate, sort.
+ * Also handles string inputs by splitting on commas.
+ */
+export function normalizeCategoryCodes(value: any): string[] {
+  if (!Array.isArray(value)) return [];
+  const out = value
+    .map((v) => (v === null || v === undefined ? '' : String(v).trim()))
+    .filter((v) => v !== '');
+  out.sort((a, b) => a.localeCompare(b));
+  return Array.from(new Set(out));
+}
+
+function toTruthKey(codes: any): string {
+  const normalized = normalizeCategoryCodes(codes).map((c) => c.toLowerCase());
+  return normalized.join('|');
+}
+
+function truthFromMeta(meta: any): ModelTruth | null {
+  const brand = typeof meta?.brand === 'string' ? meta.brand.trim().toLowerCase() : '';
+  const vendor = typeof meta?.vendor_name === 'string' ? meta.vendor_name.trim().toLowerCase() : '';
+  const categoryKey = toTruthKey(meta?.category_codes);
+  if (brand === '' || vendor === '' || categoryKey === '') return null;
+  return { brand, vendor, categoryKey };
+}
+
+function truthFromVariant(v: any): ModelTruth | null {
+  const brand = typeof v?.brand === 'string' ? v.brand.trim().toLowerCase() : '';
+  const vendor = typeof v?.vendor_name === 'string' ? v.vendor_name.trim().toLowerCase() : '';
+  const categoryKey = toTruthKey(v?.category_codes);
+  if (brand === '' || vendor === '' || categoryKey === '') return null;
+  return { brand, vendor, categoryKey };
+}
+
+/**
+ * Filter out variants whose brand, vendor, or category codes conflict with the
+ * established truth for their parent model (derived from metadata or the first
+ * variant to set it).
+ *
+ * Variants without a known truth record are kept (no parent metadata means
+ * nothing to conflict with). Variants that can't produce their own truth
+ * signature are also kept (they can't meaningfully conflict).
+ */
+export function filterInconsistentVariants(
+  validatedProducts: any[],
+  modelMetadataByCode: Map<string, any>,
+): ConsistencyResult {
+  // Group variants by model_code
+  const variantsByModel = new Map<string, any[]>();
+  for (const v of validatedProducts) {
+    const modelCode =
+      typeof v.model_code === 'string' && v.model_code.trim() !== ''
+        ? v.model_code.trim()
+        : v.product_code;
+    const arr = variantsByModel.get(modelCode) ?? [];
+    arr.push(v);
+    variantsByModel.set(modelCode, arr);
+  }
+
+  // Build truth table — prefer parent metadata, fall back to first variant
+  const truthByModelCode = new Map<string, ModelTruth>();
+  for (const [modelCode, meta] of modelMetadataByCode) {
+    const t = truthFromMeta(meta);
+    if (t) truthByModelCode.set(modelCode, t);
+  }
+  for (const [modelCode, modelVariants] of variantsByModel) {
+    if (truthByModelCode.has(modelCode)) continue;
+    for (const v of modelVariants) {
+      const t = truthFromVariant(v);
+      if (t) {
+        truthByModelCode.set(modelCode, t);
+        break;
+      }
+    }
+  }
+
+  let dropped = 0;
+  const droppedModelCodes = new Set<string>();
+  const kept = validatedProducts.filter((v) => {
+    const modelCode =
+      typeof v.model_code === 'string' && v.model_code.trim() !== ''
+        ? v.model_code.trim()
+        : v.product_code;
+    const truth = truthByModelCode.get(modelCode);
+    if (!truth) return true; // No truth record — nothing to conflict with
+    const vt = truthFromVariant(v);
+    if (!vt) return true; // Variant can't produce a truth signature — keep
+    if (
+      vt.brand !== truth.brand ||
+      vt.vendor !== truth.vendor ||
+      vt.categoryKey !== truth.categoryKey
+    ) {
+      dropped++;
+      droppedModelCodes.add(modelCode);
+      return false;
+    }
+    return true;
+  });
+
+  return { kept, dropped, droppedModelCodes };
 }

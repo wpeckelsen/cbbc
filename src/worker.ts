@@ -5,7 +5,7 @@ import "dotenv/config";
 import { FtpClient } from './ftp/ftp-client';
 import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, parseCategoryHierarchyCsv, parseImagesCsv } from './parsers/csv-parser';
 import { ProductValidator } from './validation/product-validator';
-import { ProductFilter } from './filters/product-filter';
+import { isVariantEligible, getEligibilityStats, filterInconsistentVariants } from './filters/product-filter';
 import { configureProductsApi, insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev } from './api/products-api';
 import { logBoundarySample } from './utils/pipeline-debug';
 import { RunContext } from './logging';
@@ -26,15 +26,6 @@ function normalizeHyphenKeysInPlace(record: Record<string, any>): void {
   }
 }
 
-function normalizeCategoryCodes(value: any): string[] {
-  if (!Array.isArray(value)) return [];
-  const out = value
-    .map((v) => (v === null || v === undefined ? '' : String(v).trim()))
-    .filter((v) => v !== '');
-  out.sort((a, b) => a.localeCompare(b));
-  return Array.from(new Set(out));
-}
-
 function normalizeNonEmptyString(value: any): string | undefined {
   if (typeof value !== 'string') return undefined;
   const t = value.trim();
@@ -48,23 +39,9 @@ function normalizeCategoryCodesFromCsv(value: any): string[] {
     .map((v) => v.trim())
     .filter((v) => v !== '')
     .map((v) => v.toLowerCase());
-  return normalizeCategoryCodes(parts);
-}
-
-function isConsistentModelGroup(variants: any[]): boolean {
-  if (variants.length <= 1) return true;
-  const first = variants[0];
-  const brand = typeof first.brand === 'string' ? first.brand.trim() : '';
-  const vendor = typeof first.vendor_name === 'string' ? first.vendor_name.trim() : '';
-  const categoryKey = normalizeCategoryCodes(first.category_codes).join('|');
-
-  for (const v of variants) {
-    const b = typeof v.brand === 'string' ? v.brand.trim() : '';
-    const vn = typeof v.vendor_name === 'string' ? v.vendor_name.trim() : '';
-    const ck = normalizeCategoryCodes(v.category_codes).join('|');
-    if (b !== brand || vn !== vendor || ck !== categoryKey) return false;
-  }
-  return true;
+  const out = parts.filter((v) => v !== '');
+  out.sort((a, b) => a.localeCompare(b));
+  return Array.from(new Set(out));
 }
 
 async function runPipeline(): Promise<void> {
@@ -79,18 +56,6 @@ async function runPipeline(): Promise<void> {
 
   const ftpClient = new FtpClient(log);
   const validator = new ProductValidator();
-  const productFilter = new ProductFilter({
-    requiresPrice: true,
-    requiresStock: true,
-    customLogic: (p: any) => {
-      const stockTotal = p.stock_total || 0;
-      const hasImage = typeof p.image_url === 'string' && p.image_url.trim() !== '';
-      const hasCategories = Array.isArray(p.category_codes) && p.category_codes.length > 0;
-      const hasBrand = typeof p.brand === 'string' && p.brand.trim() !== '';
-      const hasNoValidationErrors = Array.isArray(p.errors) && p.errors.length === 0;
-      return stockTotal > 1 && hasImage && hasCategories && hasBrand && hasNoValidationErrors;
-    },
-  }, log);
 
   let pipelineModels = 0;
   let pipelineVariants = 0;
@@ -161,7 +126,8 @@ async function runPipeline(): Promise<void> {
     const stockMap = new Map(stockProduct.map(s => [s.PRODUCT_CODE, s]));
     const imageMap = new Map(images.map(i => [i.PRODUCT_CODE, i]));
 
-    // Step 5: Validate and enrich products (in-memory, before sending to DB)
+    // Step 5: Build model metadata from parent rows, then validate and enrich
+    // all rows that flow through the pipeline (child variants + sellable parents).
     const parentRows: any[] = [];
     const variantRows: any[] = [];
     for (const p of products) {
@@ -172,6 +138,8 @@ async function runPipeline(): Promise<void> {
 
     log.info(`Split into ${parentRows.length} parent rows + ${variantRows.length} variant rows`);
 
+    // Build model metadata from parent rows (used later for consistency checking
+    // and promotion name/brand/category fallback).
     const modelMetadataByCode = new Map<string, any>();
     for (const p of parentRows) {
       const modelCode = normalizeNonEmptyString(p.product_code);
@@ -192,15 +160,18 @@ async function runPipeline(): Promise<void> {
       });
     }
 
-
-
+    // Select which parent rows act as variants in their own right.
+    // A parent row is "sellable" when it meets the same eligibility checks
+    // that will be applied post-enrichment by isVariantEligible. We pre-screen
+    // here to avoid enriching rows that would be discarded anyway.
     const isSellableParentRow = (p: any): boolean => {
       const productCode = normalizeNonEmptyString(p.product_code);
       if (!productCode) return false;
 
-      const hasName = normalizeNonEmptyString(p.product_name_en);
-      const hasBrand = normalizeNonEmptyString(p.brand);
-      const hasVendor = normalizeNonEmptyString(p.vendor_name);
+      // Quick pre-checks on raw CSV fields before enrichment.
+      const hasName = Boolean(normalizeNonEmptyString(p.product_name_en));
+      const hasBrand = Boolean(normalizeNonEmptyString(p.brand));
+      const hasVendor = Boolean(normalizeNonEmptyString(p.vendor_name));
       const hasCategories = normalizeCategoryCodesFromCsv(p.categories).length > 0;
       const barcode = normalizeNonEmptyString(p.barcode);
       const hasBarcode = typeof barcode === 'string' && /^\d+$/.test(barcode);
@@ -216,7 +187,7 @@ async function runPipeline(): Promise<void> {
     const rowsToEnrich = [...variantRows, ...sellableParentRows];
 
     if (sellableParentRows.length > 0) {
-      log.debug(`Included ${sellableParentRows.length} sellable parent rows as variants`);
+      log.info(`Included ${sellableParentRows.length} sellable parent rows as variants`);
     }
 
     const validatedProducts = rowsToEnrich.map((product) => {
@@ -229,78 +200,39 @@ async function runPipeline(): Promise<void> {
 
     logBoundarySample('post-validate:validated_products', validatedProducts as any, undefined, log);
 
-    // Step 6: Reject inconsistent models (brand/vendor/category mismatch)
-    type ModelTruth = { brand: string; vendor: string; categoryKey: string };
-    const toTruthKey = (codes: any): string => {
-      const normalized = normalizeCategoryCodes(codes).map((c) => c.toLowerCase());
-      return normalized.join('|');
-    };
-    const truthFromMeta = (meta: any): ModelTruth | null => {
-      const brand = normalizeNonEmptyString(meta?.brand)?.toLowerCase() ?? '';
-      const vendor = normalizeNonEmptyString(meta?.vendor_name)?.toLowerCase() ?? '';
-      const categoryKey = toTruthKey(meta?.category_codes);
-      if (brand === '' || vendor === '' || categoryKey === '') return null;
-      return { brand, vendor, categoryKey };
-    };
-    const truthFromVariant = (v: any): ModelTruth | null => {
-      const brand = normalizeNonEmptyString(v?.brand)?.toLowerCase() ?? '';
-      const vendor = normalizeNonEmptyString(v?.vendor_name)?.toLowerCase() ?? '';
-      const categoryKey = toTruthKey(v?.category_codes);
-      if (brand === '' || vendor === '' || categoryKey === '') return null;
-      return { brand, vendor, categoryKey };
-    };
-
-    const variantsByModel = new Map<string, any[]>();
-    for (const v of validatedProducts) {
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      const arr = variantsByModel.get(modelCode) ?? [];
-      arr.push(v);
-      variantsByModel.set(modelCode, arr);
+    // -----------------------------------------------------------------------
+    // Step 6: Model consistency filter (formerly "gate 3").
+    // Rejects variant children whose brand/vendor/category don't match the
+    // parent model's established truth, preventing corrupt multi-variant
+    // products in Shopify.
+    // -----------------------------------------------------------------------
+    const consistency = filterInconsistentVariants(validatedProducts, modelMetadataByCode);
+    if (consistency.dropped > 0) {
+      log.warn(`Dropped ${consistency.dropped} variants conflicting with model truth (${consistency.droppedModelCodes.size} models affected)`);
     }
+    const consistentValidatedVariants = consistency.kept;
 
-    const truthByModelCode = new Map<string, ModelTruth>();
-    for (const [modelCode, meta] of modelMetadataByCode) {
-      const t = truthFromMeta(meta);
-      if (t) truthByModelCode.set(modelCode, t);
-    }
-    for (const [modelCode, variants] of variantsByModel) {
-      if (truthByModelCode.has(modelCode)) continue;
-      for (const v of variants) {
-        const t = truthFromVariant(v);
-        if (t) {
-          truthByModelCode.set(modelCode, t);
-          break;
-        }
-      }
-    }
+    // -----------------------------------------------------------------------
+    // Step 7: Unified variant eligibility filter (consolidated gates 1 + 2 + 4).
+    // A single check that replaces:
+    //   - isSellableParentRow (gate 1) — already used as a pre-screen above,
+    //     but the enriched variants are re-checked here for consistency.
+    //   - customLogic in ProductFilter (gate 2)
+    //   - Dead guard in promoteToProduction (gate 4, now removed)
+    // -----------------------------------------------------------------------
+    const eligibilityStats = getEligibilityStats(consistentValidatedVariants);
+    const qualifyingVariants = consistentValidatedVariants.filter(
+      (v) => isVariantEligible(v).eligible,
+    );
+    log.info(
+      `Eligibility: ${qualifyingVariants.length} / ${consistentValidatedVariants.length} variants passed (${eligibilityStats.passRate.toFixed(1)}%)`,
+    );
+    log.info('Rejection reasons', { reasons: eligibilityStats.rejectionReasons });
 
-    let droppedVariants = 0;
-    const droppedModelCodes = new Set<string>();
-    const consistentValidatedVariants = validatedProducts.filter((v) => {
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      const truth = truthByModelCode.get(modelCode);
-      if (!truth) return true;
-      const vt = truthFromVariant(v);
-      if (!vt) return true;
-      if (vt.brand !== truth.brand || vt.vendor !== truth.vendor || vt.categoryKey !== truth.categoryKey) {
-        droppedVariants += 1;
-        droppedModelCodes.add(modelCode);
-        return false;
-      }
-      return true;
-    });
-
-    if (droppedVariants > 0) {
-      log.warn(`Dropped ${droppedVariants} variants conflicting with model truth (${droppedModelCodes.size} models affected)`);
-    }
-
-    // Step 7: Determine model eligibility via qualifying variants (stock_total > 1)
-    const filterStats = productFilter.getFilterStats(consistentValidatedVariants);
-
-    const qualifyingVariants = productFilter.filterProducts(consistentValidatedVariants);
-    log.info(`Filter: ${qualifyingVariants.length} / ${consistentValidatedVariants.length} variants passed (${filterStats.passRate.toFixed(1)}%)`);
-
-    // Step 8: Eligible models are those with >= 1 qualifying variant, then cap by model count
+    // -----------------------------------------------------------------------
+    // Step 8: Eligible models are those with >= 1 qualifying variant.
+    // Then cap by model count if PIPELINE_MODEL_LIMIT is set.
+    // -----------------------------------------------------------------------
     const eligibleModelSet = new Set<string>();
     for (const v of qualifyingVariants) {
       const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
@@ -352,9 +284,7 @@ async function runPipeline(): Promise<void> {
     const cappedStockProduct = stockProduct.filter((s) => typeof s.PRODUCT_CODE === 'string' && cappedProductCodes.has(s.PRODUCT_CODE));
     const cappedImages = images.filter((i) => cappedProductCodes.has(i.PRODUCT_CODE));
 
-
-
-    // Step 10: Insert ONLY filtered data to staging (not all 127k variants!)
+    // Step 10: Insert ONLY filtered data to staging
     if (config.dev.cleanSlate) {
       await clearStagingTablesForDev();
     }

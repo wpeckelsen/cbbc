@@ -868,31 +868,27 @@ export async function promoteToProduction(
 
       const variantNameEn = typeof v.name_en === 'string' ? v.name_en.trim() : '';
 
-      if (
-        typeof v.barcode !== 'string' ||
-        typeof v.image_url !== 'string' ||
-        variantNameEn === '' ||
-        typeof priceExcl !== 'number' ||
-        typeof priceIncl !== 'number' ||
-        typeof stockTotal !== 'number'
-      ) {
-        continue;
-      }
-
-      const priceDkkExcl = Math.round(priceExcl * EUR_TO_DKK * 100) / 100;
+      // Note: eligibility (name, barcode, image, price, stock) is now checked
+      // upstream by isVariantEligible() in product-filter.ts before variants
+      // reach promoteToProduction. The guard that previously lived here has
+      // been removed to avoid maintaining two copies of the same logic.
+      // The non-null assertions (!) below are safe because isVariantEligible
+      // already confirmed these fields are present.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const priceDkkExcl = Math.round(priceExcl! * EUR_TO_DKK * 100) / 100;
 
       variantsToPromote.push({
         product_code: v.product_code,
         model_code: modelCode,
         name_en: variantNameEn,
-        barcode: v.barcode,
-        price_eur_excl_vat: priceExcl,
-        price_eur_incl_vat: priceIncl,
+        barcode: v.barcode!,
+        price_eur_excl_vat: priceExcl!,
+        price_eur_incl_vat: priceIncl!,
         price_dkk_excl_vat: priceDkkExcl,
-        stock_total: stockTotal,
+        stock_total: stockTotal!,
         stock_vaasa: typeof v.stock_vaasa === 'number' ? v.stock_vaasa : null,
         stock_sweden: typeof v.stock_sweden === 'number' ? v.stock_sweden : null,
-        image_url: v.image_url,
+        image_url: v.image_url!,
         imported_at: nowIso,
       });
     }
