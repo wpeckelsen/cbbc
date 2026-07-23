@@ -8,12 +8,14 @@ import { ModelWithVariants, ProductionModel, ProductionVariant } from '../api/pr
  * - product vendor      <- model.vendor_name (brand is intentionally dropped)
  * - product tags        <- model.category_codes
  * - product handle      <- cbbc-{model_code}  (stable upsert key)
+ * - product description <- model.short_description_en
  * - metafield           <- cbbc.model_code
  * - variant sku         <- variant.product_code
  * - variant barcode     <- variant.barcode
  * - variant price       <- variant.price_eur_excl_vat (Shopify applies VAT)
  * - variant option      <- variant.name_en (only for multi-variant models)
- * - variant image       <- variant.image_url
+ * - variant image       <- variant.image_urls[0] (primary image)
+ * - product media       <- all distinct variant image_urls (full gallery)
  * - inventory           <- variant.stock_total (single location; handled separately)
  */
 
@@ -71,7 +73,9 @@ export function buildProductSetInput(
   // Product-level media: every distinct variant image becomes product media so
   // variants can reference it by originalSource.
   const imageUrls = distinct(
-    variants.map((v) => v.image_url).filter((u): u is string => typeof u === 'string' && u !== '')
+    variants
+      .flatMap((v) => (Array.isArray(v.image_urls) ? v.image_urls : []))
+      .filter((u): u is string => typeof u === 'string' && u !== '')
   );
 
   const files = imageUrls.map((url) => ({
@@ -93,8 +97,12 @@ export function buildProductSetInput(
       variant.optionValues = [{ optionName: DEFAULT_OPTION_NAME, name: DEFAULT_OPTION_VALUE }];
     }
 
-    if (v.image_url) {
-      variant.file = { originalSource: v.image_url, contentType: 'IMAGE' };
+    // Primary variant image: first URL from the array
+    const primaryImage = Array.isArray(v.image_urls) && v.image_urls.length > 0
+      ? v.image_urls[0]
+      : null;
+    if (primaryImage) {
+      variant.file = { originalSource: primaryImage, contentType: 'IMAGE' };
     }
 
     return variant;
@@ -116,6 +124,11 @@ export function buildProductSetInput(
     ],
     variants: variantInputs,
   };
+
+  // Product description from model metadata (short_description_en from parent CSV row)
+  if (model.short_description_en) {
+    input.descriptionHtml = model.short_description_en;
+  }
 
   if (isMultiVariant) {
     input.productOptions = [

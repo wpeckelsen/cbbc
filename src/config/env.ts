@@ -1,4 +1,6 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -13,6 +15,25 @@ function parseBooleanEnv(value: string | undefined, defaultValue: boolean = fals
 
 const env = (process.env.ENV || 'dev').trim().toLowerCase();
 const isProd = env === 'prod' || env === 'production';
+
+/**
+ * Brand filter is enabled when BRAND_FILTER_ENABLED is true AND brands.md exists
+ * and is non-empty. Defaults to true.
+ */
+function resolveBrandFilterEnabled(): boolean {
+  const envEnabled = parseBooleanEnv(process.env.BRAND_FILTER_ENABLED, true);
+  if (!envEnabled) return false;
+
+  const brandsPath = path.join(__dirname, '../../brands.md');
+  if (!fs.existsSync(brandsPath)) return false;
+
+  try {
+    const raw = fs.readFileSync(brandsPath, 'utf-8').trim();
+    return raw !== '';
+  } catch {
+    return false;
+  }
+}
 
 export const config = {
   /** 'dev' or 'prod' — controls caps, caching, and safety rails. */
@@ -73,4 +94,10 @@ export const config = {
   dev: {
     cleanSlate: parseBooleanEnv(process.env.DEV_CLEAN_SLATE, false),
   },
+  /**
+   * Brand pre-filter: when enabled, only products whose vendor_name matches
+   * the whitelist in brands.md are processed. Controlled via BRAND_FILTER_ENABLED
+   * env var (default: true) and presence/contents of brands.md.
+   */
+  brandFilterEnabled: resolveBrandFilterEnabled(),
 };

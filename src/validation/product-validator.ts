@@ -26,7 +26,8 @@ export interface ValidatedProduct {
   barcode?: string;
   vendor_name?: string;
   catalog_restriction?: string;
-  image_url?: string;
+  image_urls?: string[];
+  short_description_en?: string;
   errors: ValidationError[];
 }
 
@@ -162,7 +163,7 @@ export class ProductValidator {
     product: ProductRecord,
     price?: PriceRecord,
     stock?: StockRecord,
-    image?: { IMAGE_URL: string }
+    images?: { IMAGE_URL: string }[]
   ): ValidatedProduct {
     const { errors } = this.validateProduct(product);
 
@@ -218,14 +219,28 @@ export class ProductValidator {
       }
     }
 
-    // Image URL is required and must be http(s)
-    const imageUrl = image?.IMAGE_URL;
-    if (!imageUrl || String(imageUrl).trim() === '') {
-      errors.push({ field: 'image_url', value: imageUrl, reason: 'image_url is required' });
-    } else if (!/^https?:\/\//i.test(String(imageUrl).trim())) {
-      errors.push({ field: 'image_url', value: imageUrl, reason: 'image_url must start with http:// or https://' });
+    // Image URLs — at least one valid http(s) URL is required
+    const imageUrls = (images ?? [])
+      .map((img) => (img?.IMAGE_URL ? String(img.IMAGE_URL).trim() : ''))
+      .filter((u) => u !== '');
+    if (imageUrls.length === 0) {
+      errors.push({ field: 'image_url', value: null, reason: 'at least one image_url is required' });
     } else {
-      validated.image_url = String(imageUrl).trim();
+      const bad = imageUrls.filter((u) => !/^https?:\/\//i.test(u));
+      if (bad.length > 0) {
+        errors.push({ field: 'image_url', value: bad, reason: 'all image_urls must start with http:// or https://' });
+      } else {
+        validated.image_urls = imageUrls;
+      }
+    }
+
+    // Short description (optional)
+    const shortDesc = product.short_description_en;
+    if (shortDesc !== undefined && shortDesc !== null) {
+      const trimmed = String(shortDesc).trim();
+      if (trimmed !== '') {
+        validated.short_description_en = trimmed;
+      }
     }
 
     return validated;

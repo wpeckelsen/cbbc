@@ -54,6 +54,7 @@ type ProductModelRow = {
   vendor_name: string;
   category_codes: string[];
   catalog_restriction: string | null;
+  short_description_en: string | null;
   imported_at: string;
   last_synced_at?: string | null;
 };
@@ -69,7 +70,7 @@ type ProductVariantRow = {
   stock_total: number;
   stock_vaasa: number | null;
   stock_sweden: number | null;
-  image_url: string;
+  image_urls: string[];
   imported_at: string;
   last_synced_at?: string | null;
 };
@@ -88,7 +89,7 @@ type ModelMetadata = Partial<
     | 'category_codes'
     | 'catalog_restriction'
   >
->;
+> & { short_description_en?: string | null };
 
 const PRODUCTS_STAGING_COLUMNS = [
   'product_code',
@@ -877,6 +878,10 @@ export async function promoteToProduction(
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       const priceDkkExcl = Math.round(priceExcl! * EUR_TO_DKK * 100) / 100;
 
+      const imageUrls = Array.isArray(v.image_urls) && v.image_urls.length > 0
+        ? v.image_urls
+        : [];
+
       variantsToPromote.push({
         product_code: v.product_code,
         model_code: modelCode,
@@ -888,7 +893,7 @@ export async function promoteToProduction(
         stock_total: stockTotal!,
         stock_vaasa: typeof v.stock_vaasa === 'number' ? v.stock_vaasa : null,
         stock_sweden: typeof v.stock_sweden === 'number' ? v.stock_sweden : null,
-        image_url: v.image_url!,
+        image_urls: imageUrls,
         imported_at: nowIso,
       });
     }
@@ -943,6 +948,11 @@ export async function promoteToProduction(
           : undefined) ??
         (rep.name_sv ?? null);
 
+      // short_description_en from metadata (parent row in CSV)
+      const shortDescriptionEn = typeof meta?.short_description_en === 'string' && meta.short_description_en.trim() !== ''
+        ? meta.short_description_en.trim()
+        : null;
+
       if (nameEn === '' || brandRaw === '' || vendorRaw === '' || categoryCodes.length === 0) {
         continue;
       }
@@ -956,6 +966,7 @@ export async function promoteToProduction(
         vendor_name: vendorRaw,
         category_codes: categoryCodes,
         catalog_restriction: (meta?.catalog_restriction ?? rep.catalog_restriction) ?? null,
+        short_description_en: shortDescriptionEn,
         imported_at: nowIso,
       });
     }
@@ -1023,6 +1034,7 @@ export type ProductionModel = {
   vendor_name: string;
   category_codes: string[];
   catalog_restriction: string | null;
+  short_description_en: string | null;
   imported_at: string;
   last_synced_at: string | null;
 };
@@ -1038,7 +1050,7 @@ export type ProductionVariant = {
   stock_total: number;
   stock_vaasa: number | null;
   stock_sweden: number | null;
-  image_url: string;
+  image_urls: string[];
   imported_at: string;
   last_synced_at: string | null;
 };

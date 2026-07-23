@@ -8,8 +8,8 @@ import { ModelWithVariants } from '../api/products-api';
  * only stock levels changed (skip `productSet`, only call
  * `inventorySetQuantities`).
  *
- * Product hash covers: title, vendor, tags, per-variant SKU/barcode/price/
- * name/image — everything that goes into `productSet`.
+ * Product hash covers: title, vendor, tags, description, per-variant SKU/barcode/price/
+ * name/images — everything that goes into `productSet`.
  *
  * Stock hash covers: per-variant stock_total — the only field written via
  * `inventorySetQuantities`.
@@ -33,13 +33,14 @@ export function computeContentHashes(entry: ModelWithVariants): ContentHashes {
       name_en: model.name_en,
       vendor_name: model.vendor_name,
       category_codes: model.category_codes, // already sorted by normalizeCategoryCodes
+      short_description_en: model.short_description_en,
     },
     v: sorted.map((v) => ({
       product_code: v.product_code,
       name_en: v.name_en,
       barcode: v.barcode,
       price: (Number(v.price_dkk_excl_vat) || Number(v.price_eur_excl_vat) * 7.47417).toFixed(2),
-      image_url: v.image_url,
+      image_urls: v.image_urls,
     })),
   };
 

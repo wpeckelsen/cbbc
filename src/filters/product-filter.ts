@@ -262,9 +262,11 @@ export function isVariantEligible(variant: any): { eligible: boolean; reason?: s
     return { eligible: false, reason: 'no_stock' };
   }
 
-  // Image (gates 1, 2, 4)
-  const imageUrl = typeof variant.image_url === 'string' ? variant.image_url.trim() : '';
-  if (imageUrl === '') return { eligible: false, reason: 'no_image' };
+  // Image (gates 1, 2, 4) — must have at least one non-empty URL
+  const imageUrls: string[] = Array.isArray(variant.image_urls) ? variant.image_urls : [];
+  if (imageUrls.length === 0 || imageUrls.every(function(u: string) { return typeof u !== 'string' || u.trim() === ''; })) {
+    return { eligible: false, reason: 'no_image' };
+  }
 
   // Validation errors (gate 2)
   if (!Array.isArray(variant.errors) || variant.errors.length > 0) {

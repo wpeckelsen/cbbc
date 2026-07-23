@@ -6,6 +6,7 @@ import { FtpClient } from './ftp/ftp-client';
 import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, parseCategoryHierarchyCsv, parseImagesCsv } from './parsers/csv-parser';
 import { ProductValidator } from './validation/product-validator';
 import { isVariantEligible, getEligibilityStats, filterInconsistentVariants } from './filters/product-filter';
+import { brandFilter } from './filters/brand-filter';
 import { configureProductsApi, insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev } from './api/products-api';
 import { logBoundarySample } from './utils/pipeline-debug';
 import { RunContext } from './logging';
@@ -104,8 +105,16 @@ async function runPipeline(): Promise<void> {
     log.info(`Downloaded ${filesToDownload.length} CSV files (${cachedCount} from cache)`);
 
     // Step 3: Parse files
-    const products = fs.existsSync(path.join(cacheDir, 'products.csv')) ? await parseProductsCsv(path.join(cacheDir, 'products.csv'), log) : [];
+    let products = fs.existsSync(path.join(cacheDir, 'products.csv')) ? await parseProductsCsv(path.join(cacheDir, 'products.csv'), log) : [];
     for (const p of products) normalizeHyphenKeysInPlace(p);
+
+    // -----------------------------------------------------------------------
+    // Step 3.5: Brand pre-filter — runs before all downstream processing so
+    // that only products from whitelisted brands enter the pipeline.
+    // Controlled by BRAND_FILTER_ENABLED env var and brands.md file contents.
+    // Also normalizes vendor_name in-place (underscores → spaces, title-case).
+    // -----------------------------------------------------------------------
+    products = brandFilter(products, log, config.brandFilterEnabled);
     const prices = fs.existsSync(path.join(cacheDir, 'prices.csv')) ? await parsePricesCsv(path.join(cacheDir, 'prices.csv'), log) : [];
     const stockProduct = fs.existsSync(path.join(cacheDir, 'stock_product.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_product.csv'), 'product_code', log) : [];
     const categories = fs.existsSync(path.join(cacheDir, 'categories.csv')) ? await parseCategoriesCsv(path.join(cacheDir, 'categories.csv'), log) : [];
@@ -124,7 +133,16 @@ async function runPipeline(): Promise<void> {
     // Step 4: Build lookup maps for O(1) access (avoid O(n²) .find() loops)
     const priceMap = new Map(prices.map(p => [p.PRODUCT_CODE, p]));
     const stockMap = new Map(stockProduct.map(s => [s.PRODUCT_CODE, s]));
-    const imageMap = new Map(images.map(i => [i.PRODUCT_CODE, i]));
+
+    // Multi-image: collect ALL images per product_code
+    const imageMap = new Map<string, Array<{ IMAGE_URL: string }>>();
+    for (const img of images) {
+      const code = img.PRODUCT_CODE;
+      if (!code) continue;
+      const list = imageMap.get(code) ?? [];
+      list.push({ IMAGE_URL: img.IMAGE_URL });
+      imageMap.set(code, list);
+    }
 
     // Step 5: Build model metadata from parent rows, then validate and enrich
     // all rows that flow through the pipeline (child variants + sellable parents).
@@ -157,6 +175,7 @@ async function runPipeline(): Promise<void> {
         vendor_name: normalizeNonEmptyString(p.vendor_name),
         category_codes: normalizeCategoryCodesFromCsv(p.categories),
         catalog_restriction: normalizeNonEmptyString(p.catalog_restriction),
+        short_description_en: normalizeNonEmptyString(p.short_description_en),
       });
     }
 
@@ -178,9 +197,9 @@ async function runPipeline(): Promise<void> {
 
       const price = priceMap.get(productCode);
       const stock = stockMap.get(productCode);
-      const image = imageMap.get(productCode);
+      const productImages = imageMap.get(productCode);
 
-      return Boolean(hasName && hasBrand && hasVendor && hasCategories && hasBarcode && price && stock && image);
+      return Boolean(hasName && hasBrand && hasVendor && hasCategories && hasBarcode && price && stock && productImages && productImages.length > 0);
     };
 
     const sellableParentRows = parentRows.filter(isSellableParentRow);
@@ -193,8 +212,8 @@ async function runPipeline(): Promise<void> {
     const validatedProducts = rowsToEnrich.map((product) => {
       const price = priceMap.get(product.product_code);
       const stock = stockMap.get(product.product_code);
-      const image = imageMap.get(product.product_code);
-      return validator.enrichProduct(product, price, stock, image ? { IMAGE_URL: image.IMAGE_URL } : undefined);
+      const productImages = imageMap.get(product.product_code);
+      return validator.enrichProduct(product, price, stock, productImages);
     });
     log.info(`Enriched ${validatedProducts.length} variants`);
 
