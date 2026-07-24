@@ -258,25 +258,20 @@ async function runPipeline(): Promise<void> {
       eligibleModelSet.add(modelCode);
     }
 
-    const validVariantCountByModel = new Map<string, number>();
-    for (const v of consistentValidatedVariants) {
-      if (!Array.isArray(v.errors) || v.errors.length !== 0) continue;
+    const qualifyingVariantCountByModel = new Map<string, number>();
+    for (const v of qualifyingVariants) {
       const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      validVariantCountByModel.set(modelCode, (validVariantCountByModel.get(modelCode) ?? 0) + 1);
+      qualifyingVariantCountByModel.set(modelCode, (qualifyingVariantCountByModel.get(modelCode) ?? 0) + 1);
     }
 
     const eligibleModelOrder = Array.from(eligibleModelSet).sort((a, b) => {
-      const da = validVariantCountByModel.get(a) ?? 0;
-      const db = validVariantCountByModel.get(b) ?? 0;
+      const da = qualifyingVariantCountByModel.get(a) ?? 0;
+      const db = qualifyingVariantCountByModel.get(b) ?? 0;
       if (db !== da) return db - da;
       return a.localeCompare(b);
     });
 
-    const variantsToPromote = consistentValidatedVariants.filter((v) => {
-      if (!Array.isArray(v.errors) || v.errors.length !== 0) return false;
-      const modelCode = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
-      return eligibleModelSet.has(modelCode);
-    });
+    const variantsToPromote = qualifyingVariants;
 
     const modelLimit = config.pipelineModelLimit;
     const cappedModelCodes = modelLimit > 0
