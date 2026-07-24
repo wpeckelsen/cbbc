@@ -348,6 +348,15 @@ async function upsertModel(
   let existingId = knownProductId ?? (await shopify.findProductIdByHandle(handle));
 
   let input = buildProductSetInput(entry, existingId);
+
+  // Diagnostic: log whether descriptionHtml is present in the Shopify input
+  const descHtml = input.descriptionHtml as string | undefined;
+  if (descHtml && descHtml.trim() !== '') {
+    log.info({ modelCode, descPreview: descHtml.substring(0, 80) }, 'push: sending descriptionHtml to Shopify');
+  } else {
+    log.info({ modelCode, hasDescriptionHtml: 'descriptionHtml' in input, descValue: input.descriptionHtml }, 'push: NO descriptionHtml being sent to Shopify');
+  }
+
   let result: Awaited<ReturnType<ShopifyClient['productSet']>>;
 
   try {

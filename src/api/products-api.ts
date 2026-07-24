@@ -953,6 +953,12 @@ export async function promoteToProduction(
         ? meta.short_description_en.trim()
         : null;
 
+      if (shortDescriptionEn) {
+        log.debug({ modelCode, desc: shortDescriptionEn.substring(0, 80) }, 'promote: model description from parent metadata');
+      } else {
+        log.debug({ modelCode, metaShortDesc: meta?.short_description_en }, 'promote: model has NO description (parent metadata missing or empty)');
+      }
+
       if (nameEn === '' || brandRaw === '' || vendorRaw === '' || categoryCodes.length === 0) {
         continue;
       }
