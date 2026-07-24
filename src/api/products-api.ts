@@ -948,15 +948,25 @@ export async function promoteToProduction(
           : undefined) ??
         (rep.name_sv ?? null);
 
-      // short_description_en from metadata (parent row in CSV)
-      const shortDescriptionEn = typeof meta?.short_description_en === 'string' && meta.short_description_en.trim() !== ''
-        ? meta.short_description_en.trim()
-        : null;
+      // short_description_en: prefer parent metadata, fall back to the variant
+      // representative's own value (many variant rows in the CSV carry the
+      // description even when the parent row is empty).
+      const shortDescriptionEn =
+        (typeof meta?.short_description_en === 'string' && meta.short_description_en.trim() !== ''
+          ? meta.short_description_en.trim()
+          : undefined) ??
+        (typeof rep.short_description_en === 'string' && rep.short_description_en.trim() !== ''
+          ? rep.short_description_en.trim()
+          : undefined) ??
+        null;
 
       if (shortDescriptionEn) {
-        log.debug({ modelCode, desc: shortDescriptionEn.substring(0, 80) }, 'promote: model description from parent metadata');
+        const source = (typeof meta?.short_description_en === 'string' && meta.short_description_en.trim() !== '')
+          ? 'parent-metadata'
+          : 'variant-fallback';
+        log.debug({ modelCode, desc: shortDescriptionEn.substring(0, 80), source }, 'promote: model description');
       } else {
-        log.debug({ modelCode, metaShortDesc: meta?.short_description_en }, 'promote: model has NO description (parent metadata missing or empty)');
+        log.debug({ modelCode, metaShortDesc: meta?.short_description_en, variantShortDesc: rep.short_description_en }, 'promote: model has NO description');
       }
 
       if (nameEn === '' || brandRaw === '' || vendorRaw === '' || categoryCodes.length === 0) {
