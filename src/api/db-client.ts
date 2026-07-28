@@ -236,6 +236,54 @@ export class DatabaseClient {
     await this.pool.query(`DELETE FROM "${table}" WHERE "${nonNullColumn}" IS NOT NULL`);
   }
 
+  /**
+   * Delete all rows from a table whose value in the given column is NOT in the
+   * provided keep list. Uses PostgreSQL's ANY(array) to avoid parameter-count
+   * limits, so it works with arbitrarily large keep lists.
+   *
+   * Safety guard: when keepValues is empty this is a no-op (prevents accidental
+   * full-table truncation).
+   *
+   * @returns The number of deleted rows.
+   */
+  async deleteWhereNotIn(
+    table: string,
+    column: string,
+    keepValues: string[],
+  ): Promise<number> {
+    if (keepValues.length === 0) {
+      this.log.info(`deleteWhereNotIn(${table}, ${column}): keepValues is empty — skipping (no-op)`);
+      return 0;
+    }
+
+    // Count total rows and kept rows to log a meaningful summary.
+    const countResult = await this.pool.query(`SELECT COUNT(*)::int AS cnt FROM "${table}"`);
+    const totalCount: number = countResult.rows[0].cnt;
+
+    // DELETE … WHERE "column" != ALL($1::text[]) deletes rows whose column value
+    // does not appear anywhere in the array. Using ANY / ALL with a single array
+    // parameter avoids the parameter-count limit entirely.
+    const result = await this.pool.query(
+      `DELETE FROM "${table}" WHERE "${column}" != ALL($1::text[])`,
+      [keepValues],
+    );
+    const deleted = result.rowCount ?? 0;
+
+    if (deleted > 0) {
+      this.log.info(
+        `deleteWhereNotIn(${table}, ${column}): deleted ${deleted} stale rows ` +
+        `(${totalCount} total, ${totalCount - deleted} kept)`,
+      );
+    } else {
+      this.log.info(
+        `deleteWhereNotIn(${table}, ${column}): no stale rows to delete ` +
+        `(${totalCount} total)`,
+      );
+    }
+
+    return deleted;
+  }
+
   private serializeValue(value: any): any {
     return value;
   }

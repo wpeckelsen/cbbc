@@ -7,7 +7,7 @@ import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, pa
 import { ProductValidator } from './validation/product-validator';
 import { isVariantEligible, getEligibilityStats, filterInconsistentVariants } from './filters/product-filter';
 import { brandFilter } from './filters/brand-filter';
-import { configureProductsApi, insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev } from './api/products-api';
+import { configureProductsApi, insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev, cleanupStaleProductionRecords } from './api/products-api';
 import { logBoundarySample } from './utils/pipeline-debug';
 import { RunContext } from './logging';
 import { checkDrift } from './db/drift-check';
@@ -319,6 +319,16 @@ async function runPipeline(): Promise<void> {
     await promoteToProduction(cappedVariantsToPromote, {
       modelMetadataByCode: cappedModelMetadataByCode,
     });
+
+    // Step 12: Garbage-collect stale production records.
+    // Only runs in unlimited mode (prod) — when model cap is active (dev),
+    // we must not delete models that were simply beyond the cap.
+    if (config.pipelineModelLimit === 0) {
+      await cleanupStaleProductionRecords(
+        cappedModelCodes,
+        cappedVariantsToPromote.map((v) => v.product_code),
+      );
+    }
 
     if (config.dev.cleanSlate) {
       await clearProductionProductsForDev();

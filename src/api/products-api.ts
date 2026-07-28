@@ -1033,6 +1033,32 @@ export async function promoteToProduction(
   }
 }
 
+/**
+ * Garbage-collect stale rows from the production tables (`product_models` +
+ * `product_variants`) that are no longer in the current promoted set. This keeps
+ * the production tables a true reflection of the latest pipeline run, preventing
+ * stale products from being pushed to Shopify indefinitely.
+ *
+ * Safety guard: does nothing when either keep-list is empty (prevents accidental
+ * full-table truncation if something went wrong upstream).
+ */
+export async function cleanupStaleProductionRecords(
+  modelCodes: string[],
+  productCodes: string[],
+): Promise<void> {
+  if (modelCodes.length === 0 && productCodes.length === 0) {
+    log.info('cleanupStaleProductionRecords: both keep-lists are empty — skipping (no-op)');
+    return;
+  }
+
+  const deletedModels = await dbClient.deleteWhereNotIn('product_models', 'model_code', modelCodes);
+  const deletedVariants = await dbClient.deleteWhereNotIn('product_variants', 'product_code', productCodes);
+
+  log.info(
+    `Production GC complete: removed ${deletedModels} stale models and ${deletedVariants} stale variants`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Store sync (store-agnostic) reads + bookkeeping
 //
