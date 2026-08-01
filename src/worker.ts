@@ -69,7 +69,7 @@ async function runPipeline(): Promise<void> {
     await ftpClient.connect();
 
     // Cache directory for FTP downloads
-    const cacheDir = path.join(__dirname, '../../cache/ftp');
+    const cacheDir = path.join(process.cwd(), 'cache/ftp');
 
     // In prod, clear cache each run to ensure fresh supplier data
     if (!config.ftp.useCache && fs.existsSync(cacheDir)) {
