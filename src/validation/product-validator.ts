@@ -53,9 +53,10 @@ export class ProductValidator {
       errors.push({ field: 'name_sv', value: record.product_name_sv, reason: 'name_sv cannot be empty if provided' });
     }
 
-    // Required: brand
-    if (!record.brand || record.brand.trim() === '') {
-      errors.push({ field: 'brand', value: record.brand, reason: 'brand is required and cannot be empty' });
+    // Required: brand (vendor_name is primary source, brand is fallback)
+    const resolvedBrand = (record.vendor_name && record.vendor_name.trim() !== '') ? record.vendor_name : record.brand;
+    if (!resolvedBrand || resolvedBrand.trim() === '') {
+      errors.push({ field: 'brand', value: resolvedBrand, reason: 'brand/vendor_name is required and cannot be empty' });
     }
 
     // Required: vendor_name
@@ -180,7 +181,7 @@ export class ProductValidator {
       name_en: product.product_name_en,
       name_fi: product.product_name_fi,
       name_sv: product.product_name_sv,
-      brand: product.brand,
+      brand: ((product.vendor_name && product.vendor_name.trim() !== '') ? product.vendor_name : product.brand) ?? undefined,
       category_codes: product.categories ? product.categories.split(',').map(c => c.trim()).filter(c => c) : undefined,
       barcode: product.barcode,
       vendor_name: product.vendor_name,

@@ -223,8 +223,10 @@ export function isVariantEligible(variant: any): { eligible: boolean; reason?: s
   const nameEn = typeof variant.name_en === 'string' ? variant.name_en.trim() : '';
   if (nameEn === '') return { eligible: false, reason: 'no_name' };
 
-  // Brand (gates 1, 2)
-  const brand = typeof variant.brand === 'string' ? variant.brand.trim() : '';
+  // Brand (gates 1, 2) — vendor_name is primary source, brand is fallback
+  const brand = (typeof variant.vendor_name === 'string' && variant.vendor_name.trim() !== '')
+    ? variant.vendor_name.trim()
+    : (typeof variant.brand === 'string' ? variant.brand.trim() : '');
   if (brand === '') return { eligible: false, reason: 'no_brand' };
 
   // Vendor (gate 1)
@@ -255,10 +257,9 @@ export function isVariantEligible(variant: any): { eligible: boolean; reason?: s
     return { eligible: false, reason: 'no_price' };
   }
 
-  // Stock (gates 1, 2 — gate 2 requires > 1, which subsumes gate 1's
-  // existence check)
+  // Stock — must be at least 1 (in stock)
   const stockTotal = variant.stock_total;
-  if (typeof stockTotal !== 'number' || !Number.isFinite(stockTotal) || stockTotal <= 1) {
+  if (typeof stockTotal !== 'number' || !Number.isFinite(stockTotal) || stockTotal < 1) {
     return { eligible: false, reason: 'no_stock' };
   }
 
@@ -345,16 +346,16 @@ function toTruthKey(codes: any): string {
 }
 
 function truthFromMeta(meta: any): ModelTruth | null {
-  const brand = typeof meta?.brand === 'string' ? meta.brand.trim().toLowerCase() : '';
   const vendor = typeof meta?.vendor_name === 'string' ? meta.vendor_name.trim().toLowerCase() : '';
+  const brand = vendor === '' && typeof meta?.brand === 'string' ? meta.brand.trim().toLowerCase() : '';
   const categoryKey = toTruthKey(meta?.category_codes);
   if (brand === '' || vendor === '' || categoryKey === '') return null;
   return { brand, vendor, categoryKey };
 }
 
 function truthFromVariant(v: any): ModelTruth | null {
-  const brand = typeof v?.brand === 'string' ? v.brand.trim().toLowerCase() : '';
   const vendor = typeof v?.vendor_name === 'string' ? v.vendor_name.trim().toLowerCase() : '';
+  const brand = vendor === '' && typeof v?.brand === 'string' ? v.brand.trim().toLowerCase() : '';
   const categoryKey = toTruthKey(v?.category_codes);
   if (brand === '' || vendor === '' || categoryKey === '') return null;
   return { brand, vendor, categoryKey };

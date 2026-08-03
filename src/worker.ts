@@ -189,7 +189,7 @@ async function runPipeline(): Promise<void> {
 
       // Quick pre-checks on raw CSV fields before enrichment.
       const hasName = Boolean(normalizeNonEmptyString(p.product_name_en));
-      const hasBrand = Boolean(normalizeNonEmptyString(p.brand));
+      const hasBrand = Boolean(normalizeNonEmptyString(p.vendor_name) || normalizeNonEmptyString(p.brand));
       const hasVendor = Boolean(normalizeNonEmptyString(p.vendor_name));
       const hasCategories = normalizeCategoryCodesFromCsv(p.categories).length > 0;
       const barcode = normalizeNonEmptyString(p.barcode);

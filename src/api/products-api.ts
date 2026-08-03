@@ -907,12 +907,14 @@ export async function promoteToProduction(
     for (const [modelCode, rep] of modelRepresentative) {
       const meta = opts?.modelMetadataByCode?.get(modelCode);
 
-      const brandRaw = typeof meta?.brand === 'string' && meta.brand.trim() !== ''
-        ? meta.brand
-        : (typeof rep.brand === 'string' ? rep.brand : '');
       const vendorRaw = typeof meta?.vendor_name === 'string' && meta.vendor_name.trim() !== ''
         ? meta.vendor_name
         : (typeof rep.vendor_name === 'string' ? rep.vendor_name : '');
+      const brandRaw = vendorRaw !== ''
+        ? vendorRaw
+        : (typeof meta?.brand === 'string' && meta.brand.trim() !== ''
+            ? meta.brand
+            : (typeof rep.brand === 'string' ? rep.brand : ''));
 
       const categoryCodes = Array.isArray(meta?.category_codes) && meta.category_codes.length > 0
         ? normalizeCategoryCodes(meta.category_codes)
