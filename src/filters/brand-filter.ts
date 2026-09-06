@@ -85,8 +85,7 @@ export function normalizeVendorName(raw: string | undefined | null): string {
 
 export interface BrandFilterResult {
   kept: any[];
-  dropped: number;
-  matchedBrands: string[];
+  dropped: any[];
 }
 
 /**
@@ -95,31 +94,31 @@ export interface BrandFilterResult {
  * For each product, normalizes the vendor_name field (underscores → spaces,
  * auto-capitalize) in-place, then checks against the whitelist.
  *
- * Returns the filtered product array. Mutates vendor_name on kept products
- * so the cleaned value flows downstream.
+ * Returns `{ kept, dropped }` so callers can trace why a product was dropped.
+ * Mutates vendor_name on kept products so the cleaned value flows downstream.
  *
- * The filter is a no-op (returns all products) when brands.md is missing/empty
- * or when `enabled` is explicitly false.
+ * The filter is a no-op (returns all products, none dropped) when brands.md is
+ * missing/empty or when `enabled` is explicitly false.
  */
 export function brandFilter(
   products: any[],
   log: Logger = defaultLogger,
   enabled: boolean = true,
-): any[] {
+): BrandFilterResult {
   if (!enabled) {
     log.info('Brand filter is disabled via config — skipping');
-    return products;
+    return { kept: products, dropped: [] };
   }
 
   const whitelist = loadBrandWhitelist(log);
   if (whitelist.size === 0) {
     log.info('Brand whitelist is empty — skipping brand filter');
-    return products;
+    return { kept: products, dropped: [] };
   }
 
   const kept: any[] = [];
+  const dropped: any[] = [];
   const matchedBrands = new Set<string>();
-  let dropped = 0;
 
   for (const product of products) {
     const rawVendor = product.vendor_name;
@@ -132,15 +131,15 @@ export function brandFilter(
       kept.push(product);
       matchedBrands.add(normalized);
     } else {
-      dropped++;
+      dropped.push(product);
     }
   }
 
   log.info(
-    `Brand filter: ${products.length} products → ${kept.length} kept, ${dropped} dropped ` +
+    `Brand filter: ${products.length} products → ${kept.length} kept, ${dropped.length} dropped ` +
     `(${matchedBrands.size} distinct brands matched)`,
   );
   log.debug(`Matched brands: ${[...matchedBrands].sort().join(', ')}`);
 
-  return kept;
+  return { kept, dropped };
 }

@@ -9,7 +9,6 @@
     "dev": "ts-node-dev --respawn --transpile-only src/worker.ts",
     "shopify:auth": "ts-node src/shopify/auth.ts",
     "shopify:push:prod": "ts-node src/shopify/push-production.ts",
-    "shopify:publish-existing": "ts-node src/shopify/publish-existing.ts",
     "db:status": "ts-node src/db/status.ts",
     "db:migrate": "ts-node src/db/migrate.ts",
     "db:check": "ts-node src/db/drift-check.ts",
@@ -22,7 +21,6 @@
   "dependencies": {
     "basic-ftp": "^5.0.4",
     "csv-parser": "^3.0.0",
-    "node-cron": "^3.0.3",
     "pino": "^8.16.2",
     "pino-pretty": "^10.2.3",
     "pg": "^8.13.1",
@@ -30,7 +28,6 @@
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
-    "@types/node-cron": "^3.0.9",
     "@types/pg": "^8.11.10",
     "typescript": "^5.3.3",
     "ts-node": "^10.9.2",

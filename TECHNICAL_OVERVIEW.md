@@ -10,8 +10,8 @@ For operational guidance (how to run, deploy, configure), see [PIPELINE_GUIDE.md
 
 | File | Role |
 |------|------|
-| `src/worker.ts` | Main entrypoint. Orchestrates the full pipeline: FTP download → parse → enrich → filter → cap → staging → promotion. In prod, registers cron. In dev, runs on boot then triggers Shopify push. |
-| `src/shopify/push-production.ts` | Shopify push. Reads promoted data from DB and syncs to Shopify. Can run standalone (`npm run shopify:push:prod`) or is called by `worker.ts` in dev mode. |
+| `src/worker.ts` | Main entrypoint. Runs the full flow once and exits: pipeline (FTP download → parse → enrich → filter → cap → staging → promotion) → Shopify push. |
+| `src/shopify/push-production.ts` | Shopify push. Reads promoted data from DB and syncs to Shopify. Called by `worker.ts`, or standalone via `npm run shopify:push:prod`. |
 
 ## Module map
 
@@ -28,11 +28,11 @@ For operational guidance (how to run, deploy, configure), see [PIPELINE_GUIDE.md
 | `db/migration-utils.ts` | Shared utilities: `createClient`, `listMigrationFiles`, `getAppliedMigrations`. |
 | `db/schema-preflight.ts` | Introspects live table columns, drops keys not in the schema before writes. |
 | `db/drift-check.ts` | Compares migration files on disk vs. `schema_migrations` table. |
-| `db/reset-remote.ts` | Drops all public schema objects and re-runs migrations. Guarded by `NODE_ENV=development` + `CONFIRM_NUKE=YES`. |
+| `db/reset-remote.ts` | Drops all public schema objects and re-runs migrations. Guarded by `ENV` (refuses when prod) + `CONFIRM_NUKE=YES`. |
 | `shopify/shopify-client.ts` | Shopify GraphQL Admin client with throttle-aware retry. |
 | `shopify/mappers.ts` | Maps production DB rows → Shopify `ProductSetInput`. |
 | `shopify/content-hash.ts` | Computes content hashes to skip unchanged models during push. |
-| `utils/pipeline-debug.ts` | `logBoundarySample()` — logs sample records at pipeline boundaries when `LOG_LEVEL=debug`. |
+| `utils/pipeline-debug.ts` | `logBoundarySample()` — logs sample records at pipeline boundaries in dev (debug log level). |
 | `logging/run-context.ts` | `RunContext` — per-run logger with unique run ID and timing. |
 
 ---
@@ -137,8 +137,7 @@ FK safety: variants are only written if their `model_code` exists in the promote
 
 ### Triggered by
 
-- **Dev mode**: automatically after pipeline completes (called from `worker.ts`)
-- **Prod mode**: on its own cron schedule (`SHOPIFY_PUSH_CRON`), registered by `worker.ts`
+- **Scheduled run**: after the pipeline completes, `worker.ts` runs the push in the same process
 - **Manual**: `npm run shopify:push:prod`
 
 ### Steps
@@ -147,7 +146,7 @@ FK safety: variants are only written if their `model_code` exists in the promote
 2. For each model:
    - Compute content hash of current data
    - Compare against stored hash in `store_product_links`
-   - If unchanged and `SHOPIFY_FORCE_PUSH` is not set → skip
+   - If unchanged → skip
    - Otherwise: `buildProductSetInput()` → `ShopifyClient.productSet()` (upsert product + variants)
 3. `setInventoryQuantities()` — writes stock to a single Shopify location per variant.
 4. Upserts into `store_product_links` / `store_variant_links` (maps model/variant → Shopify IDs).

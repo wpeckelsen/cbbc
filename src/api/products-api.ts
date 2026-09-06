@@ -573,18 +573,6 @@ export async function insertProductsStaging(products: any[]): Promise<void> {
   }
 }
 
-export async function clearStagingTablesForDev(): Promise<void> {
-  await dbClient.deleteAllByNonNullColumn('products_staging', 'product_code');
-  await dbClient.deleteAllByNonNullColumn('prices_staging', 'product_code');
-  await dbClient.deleteAllByNonNullColumn('stock_staging', 'source');
-  await dbClient.deleteAllByNonNullColumn('images_staging', 'product_code');
-}
-
-export async function clearProductionProductsForDev(): Promise<void> {
-  await dbClient.deleteAllByNonNullColumn('product_variants', 'product_code');
-  await dbClient.deleteAllByNonNullColumn('product_models', 'model_code');
-}
-
 /**
  * Insert prices into staging table (with batching for large datasets)
  */
@@ -1044,21 +1032,75 @@ export async function promoteToProduction(
  * Safety guard: does nothing when either keep-list is empty (prevents accidental
  * full-table truncation if something went wrong upstream).
  */
+export interface StaleCleanupResult {
+  deletedModels: any[];
+  deletedVariants: any[];
+}
+
 export async function cleanupStaleProductionRecords(
   modelCodes: string[],
   productCodes: string[],
-): Promise<void> {
+): Promise<StaleCleanupResult> {
   if (modelCodes.length === 0 && productCodes.length === 0) {
     log.info('cleanupStaleProductionRecords: both keep-lists are empty — skipping (no-op)');
+    return { deletedModels: [], deletedVariants: [] };
+  }
+
+  const deletedModels = modelCodes.length > 0
+    ? await dbClient.deleteWhereNotInReturning<any>('product_models', 'model_code', modelCodes, ['model_code', 'name_en', 'vendor_name'])
+    : [];
+  const deletedVariants = productCodes.length > 0
+    ? await dbClient.deleteWhereNotInReturning<any>('product_variants', 'product_code', productCodes, ['product_code', 'model_code', 'barcode', 'name_en'])
+    : [];
+
+  log.info(
+    `Production GC complete: removed ${deletedModels.length} stale models and ${deletedVariants.length} stale variants`,
+  );
+
+  return { deletedModels, deletedVariants };
+}
+
+/**
+ * Insert per-product pipeline traces (one row per product per run). The
+ * `journey` field is serialized to JSON so pg stores it as JSONB. Optional
+ * identity fields are normalized to NULL for a clean insert.
+ */
+export async function insertProductPipelineStatus(rows: any[]): Promise<void> {
+  if (rows.length === 0) {
+    log.info('No product pipeline traces to insert');
     return;
   }
 
-  const deletedModels = await dbClient.deleteWhereNotIn('product_models', 'model_code', modelCodes);
-  const deletedVariants = await dbClient.deleteWhereNotIn('product_variants', 'product_code', productCodes);
+  const records = rows.map((r) => ({
+    run_id: r.run_id,
+    product_code: r.product_code,
+    model_code: r.model_code ?? null,
+    barcode: r.barcode ?? null,
+    vendor_name: r.vendor_name ?? null,
+    name_en: r.name_en ?? null,
+    status: r.status,
+    journey: JSON.stringify(r.journey),
+  }));
 
-  log.info(
-    `Production GC complete: removed ${deletedModels} stale models and ${deletedVariants} stale variants`,
+  await dbClient.insert('product_pipeline_status', records, { boundary: 'pipeline.trace' });
+  log.info(`Inserted ${records.length} product pipeline trace rows`);
+}
+
+/**
+ * Keep only the most recent N runs in the trace table, deleting older runs.
+ */
+export async function pruneProductPipelineStatus(keepRuns: number): Promise<void> {
+  await dbClient.query(
+    `DELETE FROM product_pipeline_status
+     WHERE run_id NOT IN (
+       SELECT run_id FROM product_pipeline_status
+       GROUP BY run_id
+       ORDER BY MAX(created_at) DESC
+       LIMIT $1
+     )`,
+    [keepRuns],
   );
+  log.info(`Pruned product pipeline traces to the latest ${keepRuns} runs`);
 }
 
 // ---------------------------------------------------------------------------

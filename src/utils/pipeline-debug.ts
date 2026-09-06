@@ -25,7 +25,7 @@ function redactRecord(record: Record<string, unknown>, maxStringLen: number): Re
  * Log a boundary sample at **debug** level.
  *
  * Previously gated by `PIPELINE_DEBUG=1`; now fires whenever the logger's
- * level includes `debug` (i.e. `LOG_LEVEL=debug`).
+ * level includes `debug` (always true in dev, which uses debug logging).
  */
 export function logBoundarySample(
   boundary: string,

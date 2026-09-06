@@ -1,4 +1,3 @@
-import * as cron from 'node-cron';
 import { config } from './config/env';
 import { logger } from './logger';
 import "dotenv/config";
@@ -7,12 +6,13 @@ import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, pa
 import { ProductValidator } from './validation/product-validator';
 import { isVariantEligible, getEligibilityStats, filterInconsistentVariants } from './filters/product-filter';
 import { brandFilter } from './filters/brand-filter';
-import { configureProductsApi, insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, clearProductionProductsForDev, clearStagingTablesForDev, cleanupStaleProductionRecords } from './api/products-api';
+import { configureProductsApi, insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, cleanupStaleProductionRecords, insertProductPipelineStatus, pruneProductPipelineStatus } from './api/products-api';
 import { logBoundarySample } from './utils/pipeline-debug';
 import { RunContext } from './logging';
 import { checkDrift } from './db/drift-check';
-import { DatabaseClient } from './api/db-client';
+import { DatabaseClient, getDatabasePool } from './api/db-client';
 import { runShopifyPush } from './shopify/push-production';
+import { TraceRecorder } from './tracing/pipeline-trace';
 import fs from 'fs';
 import path from 'path';
 
@@ -57,6 +57,7 @@ async function runPipeline(): Promise<void> {
 
   const ftpClient = new FtpClient(log);
   const validator = new ProductValidator();
+  const tracer = new TraceRecorder(run.runId);
 
   let pipelineModels = 0;
   let pipelineVariants = 0;
@@ -114,7 +115,21 @@ async function runPipeline(): Promise<void> {
     // Controlled by BRAND_FILTER_ENABLED env var and brands.md file contents.
     // Also normalizes vendor_name in-place (underscores → spaces, title-case).
     // -----------------------------------------------------------------------
-    products = brandFilter(products, log, config.brandFilterEnabled);
+    const brandResult = brandFilter(products, log, config.brandFilterEnabled);
+    for (const p of brandResult.dropped) {
+      tracer.reject(
+        {
+          product_code: p.product_code,
+          model_code: normalizeNonEmptyString(p.parent),
+          barcode: normalizeNonEmptyString(p.barcode),
+          vendor_name: normalizeNonEmptyString(p.vendor_name),
+          name_en: normalizeNonEmptyString(p.product_name_en),
+        },
+        'brand_filter',
+        'brand_not_whitelisted',
+      );
+    }
+    products = brandResult.kept;
     const prices = fs.existsSync(path.join(cacheDir, 'prices.csv')) ? await parsePricesCsv(path.join(cacheDir, 'prices.csv'), log) : [];
     const stockProduct = fs.existsSync(path.join(cacheDir, 'stock_product.csv')) ? await parseStockCsv(path.join(cacheDir, 'stock_product.csv'), 'product_code', log) : [];
     const categories = fs.existsSync(path.join(cacheDir, 'categories.csv')) ? await parseCategoriesCsv(path.join(cacheDir, 'categories.csv'), log) : [];
@@ -183,26 +198,41 @@ async function runPipeline(): Promise<void> {
     // A parent row is "sellable" when it meets the same eligibility checks
     // that will be applied post-enrichment by isVariantEligible. We pre-screen
     // here to avoid enriching rows that would be discarded anyway.
-    const isSellableParentRow = (p: any): boolean => {
+    const sellableParentCheck = (p: any): { eligible: boolean; reason?: string } => {
       const productCode = normalizeNonEmptyString(p.product_code);
-      if (!productCode) return false;
-
-      // Quick pre-checks on raw CSV fields before enrichment.
-      const hasName = Boolean(normalizeNonEmptyString(p.product_name_en));
-      const hasBrand = Boolean(normalizeNonEmptyString(p.vendor_name) || normalizeNonEmptyString(p.brand));
-      const hasVendor = Boolean(normalizeNonEmptyString(p.vendor_name));
-      const hasCategories = normalizeCategoryCodesFromCsv(p.categories).length > 0;
+      if (!productCode) return { eligible: false, reason: 'no_product_code' };
+      if (!normalizeNonEmptyString(p.product_name_en)) return { eligible: false, reason: 'no_name' };
+      if (!(normalizeNonEmptyString(p.vendor_name) || normalizeNonEmptyString(p.brand))) return { eligible: false, reason: 'no_brand' };
+      if (!normalizeNonEmptyString(p.vendor_name)) return { eligible: false, reason: 'no_vendor' };
+      if (normalizeCategoryCodesFromCsv(p.categories).length === 0) return { eligible: false, reason: 'no_categories' };
       const barcode = normalizeNonEmptyString(p.barcode);
-      const hasBarcode = typeof barcode === 'string' && /^\d+$/.test(barcode);
-
-      const price = priceMap.get(productCode);
-      const stock = stockMap.get(productCode);
+      if (typeof barcode !== 'string' || !/^\d+$/.test(barcode)) return { eligible: false, reason: 'invalid_barcode' };
+      if (!priceMap.get(productCode)) return { eligible: false, reason: 'no_price' };
+      if (!stockMap.get(productCode)) return { eligible: false, reason: 'no_stock' };
       const productImages = imageMap.get(productCode);
-
-      return Boolean(hasName && hasBrand && hasVendor && hasCategories && hasBarcode && price && stock && productImages && productImages.length > 0);
+      if (!productImages || productImages.length === 0) return { eligible: false, reason: 'no_image' };
+      return { eligible: true };
     };
 
-    const sellableParentRows = parentRows.filter(isSellableParentRow);
+    const sellableParentRows: any[] = [];
+    for (const p of parentRows) {
+      const check = sellableParentCheck(p);
+      if (check.eligible) {
+        sellableParentRows.push(p);
+      } else {
+        tracer.reject(
+          {
+            product_code: p.product_code,
+            model_code: normalizeNonEmptyString(p.product_code),
+            barcode: normalizeNonEmptyString(p.barcode),
+            vendor_name: normalizeNonEmptyString(p.vendor_name),
+            name_en: normalizeNonEmptyString(p.product_name_en),
+          },
+          'parent_pre_screen',
+          check.reason ?? 'parent_not_sellable',
+        );
+      }
+    }
     const rowsToEnrich = [...variantRows, ...sellableParentRows];
 
     if (sellableParentRows.length > 0) {
@@ -229,6 +259,19 @@ async function runPipeline(): Promise<void> {
     if (consistency.dropped > 0) {
       log.warn(`Dropped ${consistency.dropped} variants conflicting with model truth (${consistency.droppedModelCodes.size} models affected)`);
     }
+    for (const v of consistency.droppedVariants) {
+      tracer.reject(
+        {
+          product_code: v.product_code,
+          model_code: typeof v.model_code === 'string' ? v.model_code : undefined,
+          barcode: v.barcode,
+          vendor_name: v.vendor_name,
+          name_en: v.name_en,
+        },
+        'consistency',
+        'inconsistent_variant',
+      );
+    }
     const consistentValidatedVariants = consistency.kept;
 
     // -----------------------------------------------------------------------
@@ -240,9 +283,26 @@ async function runPipeline(): Promise<void> {
     //   - Dead guard in promoteToProduction (gate 4, now removed)
     // -----------------------------------------------------------------------
     const eligibilityStats = getEligibilityStats(consistentValidatedVariants);
-    const qualifyingVariants = consistentValidatedVariants.filter(
-      (v) => isVariantEligible(v).eligible,
-    );
+    const qualifyingVariants: any[] = [];
+    for (const v of consistentValidatedVariants) {
+      const eligibility = isVariantEligible(v);
+      if (eligibility.eligible) {
+        qualifyingVariants.push(v);
+      } else {
+        tracer.reject(
+          {
+            product_code: v.product_code,
+            model_code: typeof v.model_code === 'string' ? v.model_code : undefined,
+            barcode: v.barcode,
+            vendor_name: v.vendor_name,
+            name_en: v.name_en,
+          },
+          'eligibility',
+          eligibility.reason ?? 'unknown',
+          Array.isArray(v.errors) && v.errors.length > 0 ? { validation_errors: v.errors } : undefined,
+        );
+      }
+    }
     log.info(
       `Eligibility: ${qualifyingVariants.length} / ${consistentValidatedVariants.length} variants passed (${eligibilityStats.passRate.toFixed(1)}%)`,
     );
@@ -283,6 +343,25 @@ async function runPipeline(): Promise<void> {
       return cappedModelCodeSet.has(modelCode);
     });
 
+    if (modelLimit > 0) {
+      for (const v of variantsToPromote) {
+        const mc = typeof v.model_code === 'string' && v.model_code.trim() !== '' ? v.model_code.trim() : v.product_code;
+        if (!cappedModelCodeSet.has(mc)) {
+          tracer.reject(
+            {
+              product_code: v.product_code,
+              model_code: typeof v.model_code === 'string' ? v.model_code : undefined,
+              barcode: v.barcode,
+              vendor_name: v.vendor_name,
+              name_en: v.name_en,
+            },
+            'model_cap',
+            'model_cap',
+          );
+        }
+      }
+    }
+
     pipelineModels = cappedModelCodes.length;
     pipelineVariants = cappedVariantsToPromote.length;
     if (modelLimit > 0) {
@@ -299,9 +378,6 @@ async function runPipeline(): Promise<void> {
     const cappedImages = images.filter((i) => cappedProductCodes.has(i.PRODUCT_CODE));
 
     // Step 10: Insert ONLY filtered data to staging
-    if (config.dev.cleanSlate) {
-      await clearStagingTablesForDev();
-    }
     if (cappedRawProducts.length > 0) await insertProductsStaging(cappedRawProducts);
     if (cappedPrices.length > 0) await insertPricesStaging(cappedPrices);
     if (cappedStockProduct.length > 0) await insertStockStaging(cappedStockProduct, 'product_code');
@@ -320,19 +396,46 @@ async function runPipeline(): Promise<void> {
       modelMetadataByCode: cappedModelMetadataByCode,
     });
 
+    for (const v of cappedVariantsToPromote) {
+      tracer.promote({
+        product_code: v.product_code,
+        model_code: typeof v.model_code === 'string' ? v.model_code : undefined,
+        barcode: v.barcode,
+        vendor_name: v.vendor_name,
+        name_en: v.name_en,
+      });
+    }
+
     // Step 12: Garbage-collect stale production records.
     // Only runs in unlimited mode (prod) — when model cap is active (dev),
     // we must not delete models that were simply beyond the cap.
     if (config.pipelineModelLimit === 0) {
-      await cleanupStaleProductionRecords(
+      const stale = await cleanupStaleProductionRecords(
         cappedModelCodes,
         cappedVariantsToPromote.map((v) => v.product_code),
       );
+      for (const d of stale.deletedVariants) {
+        tracer.reject(
+          { product_code: d.product_code, model_code: d.model_code, barcode: d.barcode, name_en: d.name_en },
+          'stale_cleanup',
+          'removed_stale',
+        );
+      }
+      for (const d of stale.deletedModels) {
+        tracer.reject(
+          { product_code: d.model_code, model_code: d.model_code, vendor_name: d.vendor_name, name_en: d.name_en },
+          'stale_cleanup',
+          'removed_stale',
+        );
+      }
     }
 
-    if (config.dev.cleanSlate) {
-      await clearProductionProductsForDev();
-      await clearStagingTablesForDev();
+    // Persist the per-product trace. Never let trace failures break the run.
+    try {
+      await insertProductPipelineStatus(tracer.toRows());
+      await pruneProductPipelineStatus(8);
+    } catch (traceError) {
+      log.warn(`Failed to persist product pipeline traces (${(traceError as Error).message})`);
     }
 
     logBoundarySample('pre-store-sync:products', cappedVariantsToPromote as any, { maxStringLen: 80 }, log);
@@ -342,11 +445,6 @@ async function runPipeline(): Promise<void> {
     await run.finish('success', {
       summary: { models: pipelineModels, variants: pipelineVariants },
     });
-    // In dev mode, automatically run Shopify push after pipeline completes
-    if (!config.isProd) {
-      log.info('Dev mode: starting Shopify push after pipeline');
-      await runShopifyPush();
-    }
   } catch (error) {
     const err = error as Error;
     log.error({ error: err.message, stack: err.stack }, 'Pipeline failed');
@@ -357,33 +455,31 @@ async function runPipeline(): Promise<void> {
   }
 }
 
-// Schedule cron jobs only in prod — dev runs immediately on boot instead.
-if (config.nodeEnv !== 'test' && config.isProd) {
-  cron.schedule(config.cron.schedule, async () => {
-    try {
-      await runPipeline();
-    } catch (error) {
-      const err = error as Error;
-      logger.error('Scheduled job failed', { error: err.message });
-    }
-  });
-  logger.info('Pipeline cron scheduled', { schedule: config.cron.schedule });
-
-  if (config.shopify.pushCron) {
-    cron.schedule(config.shopify.pushCron, async () => {
-      try {
-        await runShopifyPush();
-      } catch (error) {
-        const err = error as Error;
-        logger.error('Scheduled Shopify push failed', { error: err.message });
-      }
-    });
-    logger.info('Shopify push cron scheduled', { schedule: config.shopify.pushCron });
-  }
+// ---------------------------------------------------------------------------
+// Orchestrator: run the full CBBC flow once, then exit. The FTP pipeline must
+// complete (and commit its data) before the Shopify push starts, so the push
+// reads the freshly-promoted catalogue.
+// ---------------------------------------------------------------------------
+async function runAll(): Promise<void> {
+  logger.info('=== CBBC run: starting FTP pipeline ===');
+  await runPipeline();
+  logger.info('Pipeline done — production data updated. Starting Shopify push.');
+  await runShopifyPush();
+  logger.info('=== CBBC run: complete ===');
 }
 
-// Run immediately on boot in dev (unless RUN_ON_STARTUP=false), or in prod
-// only when explicitly requested via RUN_ON_STARTUP=true.
-if (require.main === module && process.env.RUN_ON_STARTUP !== 'false' && (!config.isProd || process.env.RUN_ON_STARTUP === 'true')) {
-  runPipeline().catch(console.error);
+// Run-once entrypoint. Railway's Cron Job runs `node dist/worker.js` and
+// expects the process to exit cleanly when the work is done, so we close the
+// shared pg pool before exiting.
+if (require.main === module) {
+  runAll()
+    .then(async () => {
+      await getDatabasePool().end();
+    })
+    .catch(async (error) => {
+      const err = error as Error;
+      logger.error({ error: err.message, stack: err.stack }, 'CBBC run failed');
+      process.exitCode = 1;
+      await getDatabasePool().end();
+    });
 }

@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { Writable } from 'stream';
+import { config } from '../config/env';
 
 const LOGS_DIR = path.resolve(process.cwd(), 'logs');
 
@@ -154,7 +155,7 @@ export class RunContext {
     const prefix = type === 'pipeline' ? 'p' : 's';
     this.runId = generateRunId(prefix);
 
-    const effectiveLevel = level ?? process.env.LOG_LEVEL ?? 'info';
+    const effectiveLevel = level ?? config.logging.level;
 
     // Ensure logs/ exists
     if (!fs.existsSync(LOGS_DIR)) {

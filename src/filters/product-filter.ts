@@ -325,6 +325,7 @@ export interface ConsistencyResult {
   kept: any[];
   dropped: number;
   droppedModelCodes: Set<string>;
+  droppedVariants: any[];
 }
 
 /**
@@ -405,15 +406,18 @@ export function filterInconsistentVariants(
 
   let dropped = 0;
   const droppedModelCodes = new Set<string>();
-  const kept = validatedProducts.filter((v) => {
+  const droppedVariants: any[] = [];
+  const kept: any[] = [];
+
+  for (const v of validatedProducts) {
     const modelCode =
       typeof v.model_code === 'string' && v.model_code.trim() !== ''
         ? v.model_code.trim()
         : v.product_code;
     const truth = truthByModelCode.get(modelCode);
-    if (!truth) return true; // No truth record — nothing to conflict with
+    if (!truth) { kept.push(v); continue; } // No truth record — nothing to conflict with
     const vt = truthFromVariant(v);
-    if (!vt) return true; // Variant can't produce a truth signature — keep
+    if (!vt) { kept.push(v); continue; } // Variant can't produce a truth signature — keep
     if (
       vt.brand !== truth.brand ||
       vt.vendor !== truth.vendor ||
@@ -421,10 +425,11 @@ export function filterInconsistentVariants(
     ) {
       dropped++;
       droppedModelCodes.add(modelCode);
-      return false;
+      droppedVariants.push(v);
+    } else {
+      kept.push(v);
     }
-    return true;
-  });
+  }
 
-  return { kept, dropped, droppedModelCodes };
+  return { kept, dropped, droppedModelCodes, droppedVariants };
 }

@@ -60,7 +60,7 @@ Shopify storefront (live products)
 | `npm run db:migrate` | Applies pending SQL migrations to the connected database. |
 | `npm run db:status` | Shows which migrations are applied and which are pending. |
 | `npm run db:check` | Drift check: compares migration files on disk vs. what's recorded in the DB. |
-| `npm run db:reset:remote` | **Destructive.** Drops all tables and re-runs migrations. Requires `NODE_ENV=development` + `CONFIRM_NUKE=YES`. |
+| `npm run db:reset:remote` | **Destructive.** Drops all tables and re-runs migrations. Requires `ENV=dev` + `CONFIRM_NUKE=YES`. |
 | `npm test` | Runs Jest (no test files currently exist). |
 | `npm run lint` | ESLint on `src/**/*.ts`. |
 | `npm run docker:build` | Builds Docker image. |
@@ -76,19 +76,16 @@ All configuration is via env vars. See `.env.example` for the full list with com
 
 | Variable | Values | Effect |
 |----------|--------|--------|
-| `ENV` | `dev` / `prod` | Controls everything: cron registration, caching, model caps, DB URL preference. |
-| `RUN_ON_STARTUP` | `true` / `false` / *(unset)* | Override boot-time behavior (see below). |
-| `CRON_SCHEDULE` | Cron expression | When the FTP pipeline runs. Default: `0 2 * * *` (daily 2 AM UTC). Only active in prod. |
-| `SHOPIFY_PUSH_CRON` | Cron expression | When Shopify push runs. Default: empty (disabled). Only active in prod. |
+| `ENV` | `dev` / `prod` | **Required, no default.** Controls caching, model caps, brand filter, and DB URL preference. |
 
-### Model limits
+### Model limits (dev-only, required)
 
-| Variable | Default (dev) | Default (prod) | Effect |
-|----------|---------------|----------------|--------|
-| `PIPELINE_MODEL_LIMIT` | `50` | `0` (unlimited) | Max models promoted to production tables per pipeline run. |
-| `SHOPIFY_PUSH_MODEL_LIMIT` | `5` | `0` (unlimited) | Max models pushed to Shopify per push run. |
+| Variable | Dev | Prod | Effect |
+|----------|-----|------|--------|
+| `PIPELINE_MODEL_LIMIT` | **required** (`0` = unlimited) | ignored (always unlimited) | Max models promoted to production tables per pipeline run. |
+| `SHOPIFY_PUSH_MODEL_LIMIT` | **required** (`0` = unlimited) | ignored (always unlimited) | Max models pushed to Shopify per push run. |
 
-Set to a small number (e.g. `5`) when testing to keep runs fast and avoid polluting Shopify with test products.
+Set to a small number (e.g. `5`) when testing to keep runs fast and avoid polluting Shopify with test products. These vars are ignored in prod — production is never capped.
 
 ### Database
 
@@ -117,15 +114,14 @@ The code picks the right one based on `ENV`. You can set both; no need to commen
 | `SHOPIFY_ADMIN_ACCESS_TOKEN` | Obtained via `npm run shopify:auth` |
 | `SHOPIFY_API_VERSION` | GraphQL API version (default: `2024-10`) |
 | `SHOPIFY_LOCATION_ID` | Inventory location for stock writes |
-| `SHOPIFY_FORCE_PUSH` | `true` to skip content-hash diffing and push every model regardless of changes |
 
-### Misc
+### Brand filter
 
-| Variable | Effect |
-|----------|--------|
-| `LOG_LEVEL` | `debug` / `info` / `warn` / `error` |
-| `NODE_OPTIONS` | Set to `--max-old-space-size=4096` on Railway (required for full-feed processing) |
-| `DEV_CLEAN_SLATE` | `true` to wipe staging+production tables after each dev run |
+| Variable | Dev | Prod | Effect |
+|----------|-----|------|--------|
+| `BRAND_FILTER_ENABLED` | **required** (`true`/`false`) | ignored (always on) | Only process brands listed in `brands.md`. An empty `brands.md` means "allow all brands". |
+
+Log level is fixed (`debug` dev / `info` prod). Memory (`NODE_OPTIONS`) is set in the Dockerfile.
 
 ---
 
@@ -133,24 +129,12 @@ The code picks the right one based on `ENV`. You can set both; no need to commen
 
 | | Dev (`ENV=dev`) | Prod (`ENV=prod`) |
 |---|---|---|
-| On boot | Pipeline runs immediately → Shopify push follows | Idle (cron only) |
-| Cron jobs | None registered | Pipeline + Shopify push on their schedules |
+| Run trigger | Railway Cron Job (or `npm run dev`) runs pipeline → Shopify push once, then exits | Railway Cron Job runs pipeline → Shopify push once, then exits |
 | FTP cache | Persists between runs (fast iteration) | Cleared each run (always fresh data) |
-| Model limit | 50 (pipeline), 5 (Shopify push) | Unlimited |
+| Model limit | Required (`PIPELINE_MODEL_LIMIT` / `SHOPIFY_PUSH_MODEL_LIMIT`) | Unlimited (ignored) |
+| Brand filter | Required (`BRAND_FILTER_ENABLED`) | Always on |
+| Log level | `debug` | `info` |
 | DB URL | Prefers `DATABASE_PUBLIC_URL` | Prefers `DATABASE_URL` |
-
-### `RUN_ON_STARTUP` behavior
-
-| ENV | RUN_ON_STARTUP | Result |
-|-----|----------------|--------|
-| `dev` | *(unset)* | Runs on boot (default dev behavior) |
-| `dev` | `false` | Does NOT run on boot — service sits idle |
-| `dev` | `true` | Runs on boot (same as default) |
-| `prod` | *(unset)* | Does NOT run on boot — waits for cron |
-| `prod` | `true` | Runs on boot (one-off trigger) |
-| `prod` | `false` | Does NOT run on boot (same as default) |
-
-**Warning**: If `RUN_ON_STARTUP=true` is set in prod and the pipeline crashes (e.g. OOM), Railway restarts the service and it runs again immediately — creating a crash loop. Always remove `RUN_ON_STARTUP` after triggering a one-off run.
 
 ---
 
@@ -162,8 +146,6 @@ The code picks the right one based on `ENV`. You can set both; no need to commen
 ENV=prod
 DATABASE_URL=           (auto-set by Railway Postgres plugin)
 DATABASE_PUBLIC_URL=    (auto-set by Railway Postgres plugin)
-NODE_OPTIONS=--max-old-space-size=4096
-CRON_SCHEDULE=0 2 * * *
 FTP_HOST=updateftp.duell.fi
 FTP_USER=...
 FTP_PASS=...
@@ -185,27 +167,27 @@ npm run db:migrate
 railway run npm run db:migrate
 ```
 
-This creates all tables from `0001_init.sql`. After that, the cron-triggered pipeline will work.
+This creates all tables from `0001_init.sql`. After that, the scheduled pipeline will work.
 
 ### Memory requirements
 
 The pipeline parses ~127k CSV rows into memory. Peak usage is ~500MB–1GB.
 
 - **Railway Trial plan (512MB)**: Not enough. Pipeline will OOM.
-- **Railway Hobby plan ($5/mo, up to 8GB per replica)**: Works fine. Set `NODE_OPTIONS=--max-old-space-size=4096`.
+- **Railway Hobby plan ($5/mo, up to 8GB per replica)**: Works fine. (`NODE_OPTIONS` is set in the Dockerfile.)
 
 ### Deploying a dev build on Railway
 
-If you want to deploy a dev build (e.g. to test with small model limits) without it running immediately:
+If you want to deploy a dev build (e.g. to test with small model limits):
 
 ```
 ENV=dev
-RUN_ON_STARTUP=false
 PIPELINE_MODEL_LIMIT=5
 SHOPIFY_PUSH_MODEL_LIMIT=5
+BRAND_FILTER_ENABLED=true
 ```
 
-The service will start and sit idle. No cron is registered in dev mode. To trigger a run: change `RUN_ON_STARTUP` to `true` (or remove the `=false`) and redeploy.
+Dev runs are triggered via the same Railway Cron Job (or `npm run dev` locally). The three dev-only vars above are **required** in dev.
 
 ---
 
@@ -238,7 +220,7 @@ npm run db:migrate
 npm run db:check
 
 # Nuclear reset (drops everything, re-runs migrations)
-# Requires NODE_ENV=development and CONFIRM_NUKE=YES
+# Requires ENV=dev and CONFIRM_NUKE=YES
 npm run db:reset:remote
 ```
 
@@ -266,7 +248,7 @@ Variant prices are converted from EUR to DKK (rate: 7.47417) and pushed **exclud
 
 ### Content hashing
 
-The push uses content hashes to skip models that haven't changed since the last push. Set `SHOPIFY_FORCE_PUSH=true` to bypass this and push everything regardless.
+The push uses content hashes to skip models that haven't changed since the last push.
 
 ### Initial Shopify setup
 

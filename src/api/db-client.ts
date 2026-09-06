@@ -238,50 +238,43 @@ export class DatabaseClient {
 
   /**
    * Delete all rows from a table whose value in the given column is NOT in the
-   * provided keep list. Uses PostgreSQL's ANY(array) to avoid parameter-count
-   * limits, so it works with arbitrarily large keep lists.
+   * provided keep list, and return the deleted rows. Uses PostgreSQL's
+   * ANY(array) to avoid parameter-count limits, so it works with arbitrarily
+   * large keep lists.
    *
    * Safety guard: when keepValues is empty this is a no-op (prevents accidental
    * full-table truncation).
-   *
-   * @returns The number of deleted rows.
    */
-  async deleteWhereNotIn(
+  async deleteWhereNotInReturning<T>(
     table: string,
     column: string,
     keepValues: string[],
-  ): Promise<number> {
+    returningColumns: string[],
+  ): Promise<T[]> {
     if (keepValues.length === 0) {
-      this.log.info(`deleteWhereNotIn(${table}, ${column}): keepValues is empty — skipping (no-op)`);
-      return 0;
+      this.log.info(`deleteWhereNotInReturning(${table}, ${column}): keepValues is empty — skipping (no-op)`);
+      return [];
     }
 
-    // Count total rows and kept rows to log a meaningful summary.
-    const countResult = await this.pool.query(`SELECT COUNT(*)::int AS cnt FROM "${table}"`);
-    const totalCount: number = countResult.rows[0].cnt;
-
-    // DELETE … WHERE "column" != ALL($1::text[]) deletes rows whose column value
-    // does not appear anywhere in the array. Using ANY / ALL with a single array
-    // parameter avoids the parameter-count limit entirely.
     const result = await this.pool.query(
-      `DELETE FROM "${table}" WHERE "${column}" != ALL($1::text[])`,
+      `DELETE FROM "${table}" WHERE "${column}" != ALL($1::text[]) RETURNING ${returningColumns.map((c) => `"${c}"`).join(', ')}`,
       [keepValues],
     );
-    const deleted = result.rowCount ?? 0;
 
-    if (deleted > 0) {
-      this.log.info(
-        `deleteWhereNotIn(${table}, ${column}): deleted ${deleted} stale rows ` +
-        `(${totalCount} total, ${totalCount - deleted} kept)`,
-      );
-    } else {
-      this.log.info(
-        `deleteWhereNotIn(${table}, ${column}): no stale rows to delete ` +
-        `(${totalCount} total)`,
-      );
-    }
+    this.log.info(
+      `deleteWhereNotInReturning(${table}, ${column}): deleted ${result.rowCount ?? 0} stale rows`,
+    );
 
-    return deleted;
+    return result.rows as T[];
+  }
+
+  /**
+   * Run a raw SQL query and return the rows. Used for operations that don't fit
+   * the typed helpers (e.g. pruning old pipeline-trace runs).
+   */
+  async query<T>(sql: string, params: any[] = []): Promise<T[]> {
+    const result = await this.pool.query(sql, params);
+    return result.rows as T[];
   }
 
   private serializeValue(value: any): any {

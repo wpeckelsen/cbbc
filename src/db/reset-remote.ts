@@ -1,10 +1,11 @@
 import { logger } from '../logger';
 import { createClient } from './migration-utils';
 import { runMigrations } from './migrate';
+import { config } from '../config/env';
 
 function assertAllowedToReset(): void {
-  if (process.env.NODE_ENV !== 'development') {
-    throw new Error('Refusing to reset remote DB unless NODE_ENV=development');
+  if (config.isProd) {
+    throw new Error('Refusing to reset remote DB when ENV=prod');
   }
 
   if (process.env.CONFIRM_NUKE !== 'YES') {

@@ -8,7 +8,7 @@ Automated pipeline that takes raw supplier data from Duell (FTP CSV feed), valid
 - **Database**: PostgreSQL (hosted on Railway)
 - **Supplier data**: FTP CSV files from Duell
 - **Storefront**: Shopify (GraphQL Admin API)
-- **Scheduling**: `node-cron`
+- **Scheduling**: Railway Cron Jobs
 - **Hosting**: Railway (worker service + Postgres)
 
 ## Quick start (local dev)
@@ -24,10 +24,10 @@ npm run dev                  # runs pipeline immediately, then Shopify push
 
 ```bash
 npm run build                # tsc -> dist/
-npm start                    # node dist/worker.js — registers cron, sits idle
+npm start                    # node dist/worker.js — runs pipeline + Shopify push once, then exits
 ```
 
-On Railway, the service runs `node dist/worker.js`. It registers cron jobs and waits for the schedule. See [PIPELINE_GUIDE.md](./PIPELINE_GUIDE.md) for full deployment and configuration details.
+On Railway, the service runs `node dist/worker.js` on a schedule (Railway Cron Job) and exits when the run completes. See [PIPELINE_GUIDE.md](./PIPELINE_GUIDE.md) for full deployment and configuration details.
 
 ## What the pipeline does
 

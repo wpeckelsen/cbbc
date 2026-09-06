@@ -1,6 +1,4 @@
 import dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -13,26 +11,38 @@ function parseBooleanEnv(value: string | undefined, defaultValue: boolean = fals
   return defaultValue;
 }
 
-const env = (process.env.ENV || 'dev').trim().toLowerCase();
-const isProd = env === 'prod' || env === 'production';
+// ENV is required and must be exactly 'dev' or 'prod' — no silent default.
+const rawEnv = (process.env.ENV || '').trim().toLowerCase();
+if (rawEnv !== 'dev' && rawEnv !== 'prod') {
+  throw new Error(
+    `ENV must be set to 'dev' or 'prod' (got '${process.env.ENV || ''}'). Refusing to start without an explicit environment.`,
+  );
+}
+const isProd = rawEnv === 'prod';
 
-/**
- * Brand filter is enabled when BRAND_FILTER_ENABLED is true AND brands.md exists
- * and is non-empty. Defaults to true.
- */
-function resolveBrandFilterEnabled(): boolean {
-  const envEnabled = parseBooleanEnv(process.env.BRAND_FILTER_ENABLED, true);
-  if (!envEnabled) return false;
-
-  const brandsPath = path.join(__dirname, '../../brands.md');
-  if (!fs.existsSync(brandsPath)) return false;
-
-  try {
-    const raw = fs.readFileSync(brandsPath, 'utf-8').trim();
-    return raw !== '';
-  } catch {
-    return false;
+/** Required in dev (no default); prod ignores these and is always unlimited. */
+function requireNonNegativeInt(name: string): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') {
+    throw new Error(`${name} must be set when ENV=dev (use 0 for unlimited).`);
   }
+  const value = parseInt(raw.trim(), 10);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer (got '${raw}').`);
+  }
+  return value;
+}
+
+/** Required boolean in dev (no default). Prod never calls this. */
+function requireBoolean(name: string): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') {
+    throw new Error(`${name} must be set when ENV=dev (true or false).`);
+  }
+  const v = raw.trim().toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'n' || v === 'off') return false;
+  throw new Error(`${name} must be true or false (got '${raw}').`);
 }
 
 export const config = {
@@ -69,35 +79,19 @@ export const config = {
     apiVersion: process.env.SHOPIFY_API_VERSION || '2024-10',
     locationId: process.env.SHOPIFY_LOCATION_ID || '',
     publicationId: process.env.SHOPIFY_PUBLICATION_ID || '',
-    pushCron: process.env.SHOPIFY_PUSH_CRON || '',
-    forcePush: parseBooleanEnv(process.env.SHOPIFY_FORCE_PUSH, false),
-    /**
-     * One-shot backlog publish: when true, every linked product is (re)published
-     * to SHOPIFY_PUBLICATION_ID at the end of a push, regardless of content hash.
-     * Idempotent (already-published products are a no-op). Set this on the
-     * production worker to assign the Online Store channel to the existing
-     * catalogue on the next scheduled cron run, then turn it back off.
-     */
-    publishBacklog: parseBooleanEnv(process.env.SHOPIFY_PUBLISH_BACKLOG, false),
-    /** Max models to push per run. 0 = unlimited. Dev default: 5, prod: unlimited. */
-    pushModelLimit: parseInt(process.env.SHOPIFY_PUSH_MODEL_LIMIT || (isProd ? '0' : '5'), 10),
+    /** Max models to push per run. Dev: required. Prod: always unlimited (0). */
+    pushModelLimit: isProd ? 0 : requireNonNegativeInt('SHOPIFY_PUSH_MODEL_LIMIT'),
   },
   logging: {
-    level: process.env.LOG_LEVEL || 'info',
+    /** Fixed: debug in dev, info in prod. */
+    level: isProd ? 'info' : 'debug',
   },
-  cron: {
-    schedule: process.env.CRON_SCHEDULE || '0 2 * * *',
-  },
-  /** Max models to promote in the pipeline. 0 = unlimited. Dev default: 50, prod: unlimited. */
-  pipelineModelLimit: parseInt(process.env.PIPELINE_MODEL_LIMIT || (isProd ? '0' : '50'), 10),
-  nodeEnv: process.env.NODE_ENV || 'development',
-  dev: {
-    cleanSlate: parseBooleanEnv(process.env.DEV_CLEAN_SLATE, false),
-  },
+  /** Max models to promote in the pipeline. Dev: required. Prod: always unlimited (0). */
+  pipelineModelLimit: isProd ? 0 : requireNonNegativeInt('PIPELINE_MODEL_LIMIT'),
   /**
    * Brand pre-filter: when enabled, only products whose vendor_name matches
-   * the whitelist in brands.md are processed. Controlled via BRAND_FILTER_ENABLED
-   * env var (default: true) and presence/contents of brands.md.
+   * the whitelist in brands.md are processed. Prod: always on. Dev: required
+   * (true/false). An empty brands.md is treated as "allow all brands".
    */
-  brandFilterEnabled: resolveBrandFilterEnabled(),
+  brandFilterEnabled: isProd ? true : requireBoolean('BRAND_FILTER_ENABLED'),
 };
