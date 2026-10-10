@@ -89,9 +89,10 @@ export const config = {
   /** Max models to promote in the pipeline. Dev: required. Prod: always unlimited (0). */
   pipelineModelLimit: isProd ? 0 : requireNonNegativeInt('PIPELINE_MODEL_LIMIT'),
   /**
-   * Brand pre-filter: when enabled, only products whose vendor_name matches
-   * the whitelist in brands.md are processed. Prod: always on. Dev: required
-   * (true/false). An empty brands.md is treated as "allow all brands".
+   * Brand pre-filter: when enabled, only products whose brand (vendor_name,
+   * falling back to `brand`) matches the brand_whitelist table are processed.
+   * Prod: always on. Dev: required (true/false). An empty whitelist table is
+   * treated as "allow all brands".
    */
   brandFilterEnabled: isProd ? true : requireBoolean('BRAND_FILTER_ENABLED'),
 };

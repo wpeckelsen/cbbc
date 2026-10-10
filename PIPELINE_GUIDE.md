@@ -119,7 +119,7 @@ The code picks the right one based on `ENV`. You can set both; no need to commen
 
 | Variable | Dev | Prod | Effect |
 |----------|-----|------|--------|
-| `BRAND_FILTER_ENABLED` | **required** (`true`/`false`) | ignored (always on) | Only process brands listed in `brands.md`. An empty `brands.md` means "allow all brands". |
+| `BRAND_FILTER_ENABLED` | **required** (`true`/`false`) | ignored (always on) | Only process brands in the `brand_whitelist` table. An empty table means "allow all brands". |
 
 Log level is fixed (`debug` dev / `info` prod). Memory (`NODE_OPTIONS`) is set in the Dockerfile.
 
@@ -206,6 +206,11 @@ Dev runs are triggered via the same Railway Cron Job (or `npm run dev` locally).
 - `store_product_links`, `store_variant_links` — maps model/variant to Shopify IDs
 - `store_sync_logs` — audit log of Shopify push operations
 - `schema_migrations` — tracks which SQL migrations have been applied
+
+**Brand management** (editable whitelist + supplier catalogue):
+- `brand_whitelist` — brands the pipeline is allowed to process (empty = allow all)
+- `brand_catalog` — every distinct brand seen in the supplier feed (refreshed each run)
+- `brand_whitelist_events` — append-only audit log of add/remove actions
 
 ### Useful commands
 

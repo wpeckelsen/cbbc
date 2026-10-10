@@ -6,6 +6,7 @@ import { parseProductsCsv, parsePricesCsv, parseStockCsv, parseCategoriesCsv, pa
 import { ProductValidator } from './validation/product-validator';
 import { isVariantEligible, getEligibilityStats, filterInconsistentVariants } from './filters/product-filter';
 import { brandFilter } from './filters/brand-filter';
+import { configureBrandsApi, loadBrandWhitelistKeys, refreshBrandCatalog } from './api/brands-api';
 import { configureProductsApi, insertProductsStaging, insertPricesStaging, insertStockStaging, insertCategories, insertCategoryHierarchy, insertImagesStaging, promoteToProduction, cleanupStaleProductionRecords, insertProductPipelineStatus, pruneProductPipelineStatus } from './api/products-api';
 import { logBoundarySample } from './utils/pipeline-debug';
 import { RunContext } from './logging';
@@ -54,6 +55,7 @@ async function runPipeline(): Promise<void> {
   // Wire the run logger into shared modules
   const db = new DatabaseClient(log);
   configureProductsApi(log, db);
+  configureBrandsApi(log, db);
 
   const ftpClient = new FtpClient(log);
   const validator = new ProductValidator();
@@ -110,12 +112,21 @@ async function runPipeline(): Promise<void> {
     for (const p of products) normalizeHyphenKeysInPlace(p);
 
     // -----------------------------------------------------------------------
+    // Step 3.25: Refresh the brand catalog — the complete list of distinct
+    // brands in the supplier feed. Runs before the brand filter so the catalog
+    // reflects every brand the supplier sells, not just the whitelisted ones.
+    // The frontend reads this table to power its "all brands" search.
+    // -----------------------------------------------------------------------
+    await refreshBrandCatalog(products);
+
+    // -----------------------------------------------------------------------
     // Step 3.5: Brand pre-filter — runs before all downstream processing so
     // that only products from whitelisted brands enter the pipeline.
-    // Controlled by BRAND_FILTER_ENABLED env var and brands.md file contents.
+    // Controlled by BRAND_FILTER_ENABLED env var and the brand_whitelist table.
     // Also normalizes vendor_name in-place (underscores → spaces, title-case).
     // -----------------------------------------------------------------------
-    const brandResult = brandFilter(products, log, config.brandFilterEnabled);
+    const brandWhitelist = await loadBrandWhitelistKeys();
+    const brandResult = brandFilter(products, brandWhitelist, log, config.brandFilterEnabled);
     for (const p of brandResult.dropped) {
       tracer.reject(
         {

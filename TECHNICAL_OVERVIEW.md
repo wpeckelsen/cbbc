@@ -22,8 +22,11 @@ For operational guidance (how to run, deploy, configure), see [PIPELINE_GUIDE.md
 | `parsers/csv-parser.ts` | Per-file CSV parsers (semicolon-delimited). Returns typed arrays. |
 | `validation/product-validator.ts` | `enrichProduct()` — joins a product row with its price/stock/image, produces `ValidatedProduct` with `errors[]`. |
 | `filters/product-filter.ts` | Generic filter; effective rules injected from `worker.ts` via `customLogic`. |
+| `filters/brand-filter.ts` | Brand whitelist pre-filter. Matches products on canonical brand keys (`vendor_name` → `brand` fallback). |
 | `api/db-client.ts` | PostgreSQL client wrapping `pg.Pool`. Provides `insert`, `upsert`, `select`, `delete`. Registers NUMERIC type parser (OID 1700 → `parseFloat`). |
 | `api/products-api.ts` | Staging inserts, `promoteToProduction()`, store-link bookkeeping, promoted-catalogue reads. ~1k lines. |
+| `api/brands-api.ts` | Brand whitelist reads + catalog refresh (harvests all supplier brands pre-filter). |
+| `brands/brand-utils.ts` | Canonical brand identity: `canonicalizeBrand`, `displayBrand`, `resolveBrandName`. |
 | `db/migrate.ts` | Applies pending SQL migrations from `migrations/sql/`. |
 | `db/migration-utils.ts` | Shared utilities: `createClient`, `listMigrationFiles`, `getAppliedMigrations`. |
 | `db/schema-preflight.ts` | Introspects live table columns, drops keys not in the schema before writes. |

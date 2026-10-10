@@ -1,48 +1,6 @@
 import { Logger } from 'pino';
 import { logger as defaultLogger } from '../logger';
-import fs from 'fs';
-import path from 'path';
-
-// ---------------------------------------------------------------------------
-// Parse the brands whitelist from brands.md
-// ---------------------------------------------------------------------------
-
-let brandWhitelist: Set<string> | null = null;
-let brandWhitelistOriginal: string[] = [];
-
-function loadBrandWhitelist(log: Logger): Set<string> {
-  if (brandWhitelist !== null) return brandWhitelist;
-
-  const brandsPath = path.join(__dirname, '../../brands.md');
-  if (!fs.existsSync(brandsPath)) {
-    log.warn('brands.md not found — brand filter is disabled');
-    brandWhitelist = new Set();
-    return brandWhitelist;
-  }
-
-  try {
-    const raw = fs.readFileSync(brandsPath, 'utf-8').trim();
-    if (raw === '') {
-      log.warn('brands.md is empty — brand filter is disabled');
-      brandWhitelist = new Set();
-      return brandWhitelist;
-    }
-
-    brandWhitelistOriginal = raw
-      .split(',')
-      .map((b) => b.trim())
-      .filter((b) => b !== '');
-
-    brandWhitelist = new Set(brandWhitelistOriginal.map((b) => b.toLowerCase()));
-
-    log.info(`Loaded ${brandWhitelist.size} brands from brands.md`);
-    return brandWhitelist;
-  } catch (err) {
-    log.error({ error: (err as Error).message }, 'Failed to read brands.md — brand filter is disabled');
-    brandWhitelist = new Set();
-    return brandWhitelist;
-  }
-}
+import { canonicalizeBrand, resolveBrandName } from '../brands/brand-utils';
 
 // ---------------------------------------------------------------------------
 // Vendor name normalization: underscores → spaces + auto-capitalize
@@ -89,19 +47,22 @@ export interface BrandFilterResult {
 }
 
 /**
- * Filter products by brand whitelist (from brands.md).
+ * Filter products by a whitelist of canonical brand keys.
  *
- * For each product, normalizes the vendor_name field (underscores → spaces,
- * auto-capitalize) in-place, then checks against the whitelist.
+ * For each product, resolves the brand the same way the rest of the pipeline
+ * does (vendor_name first, `brand` as fallback), normalizes `vendor_name` in
+ * place (underscores → spaces, auto-capitalize), then checks the canonical key
+ * against the whitelist.
  *
  * Returns `{ kept, dropped }` so callers can trace why a product was dropped.
  * Mutates vendor_name on kept products so the cleaned value flows downstream.
  *
- * The filter is a no-op (returns all products, none dropped) when brands.md is
- * missing/empty or when `enabled` is explicitly false.
+ * The filter is a no-op (returns all products, none dropped) when the whitelist
+ * is empty or when `enabled` is explicitly false.
  */
 export function brandFilter(
   products: any[],
+  whitelist: Set<string>,
   log: Logger = defaultLogger,
   enabled: boolean = true,
 ): BrandFilterResult {
@@ -110,7 +71,6 @@ export function brandFilter(
     return { kept: products, dropped: [] };
   }
 
-  const whitelist = loadBrandWhitelist(log);
   if (whitelist.size === 0) {
     log.info('Brand whitelist is empty — skipping brand filter');
     return { kept: products, dropped: [] };
@@ -121,15 +81,18 @@ export function brandFilter(
   const matchedBrands = new Set<string>();
 
   for (const product of products) {
-    const rawVendor = product.vendor_name;
-    const normalized = normalizeVendorName(rawVendor);
+    // Resolve the brand: vendor_name first, fallback to brand (matches the
+    // rest of the pipeline's brand resolution).
+    const resolved = resolveBrandName(product.vendor_name, product.brand);
 
-    // Write normalized name back in-place so downstream code sees cleaned value
-    product.vendor_name = normalized;
+    // Normalize vendor_name in-place (underscores → spaces, title-case) so the
+    // cleaned value flows downstream (existing behavior).
+    product.vendor_name = normalizeVendorName(product.vendor_name);
 
-    if (whitelist.has(normalized.toLowerCase())) {
+    const key = canonicalizeBrand(resolved);
+    if (whitelist.has(key)) {
       kept.push(product);
-      matchedBrands.add(normalized);
+      matchedBrands.add(key);
     } else {
       dropped.push(product);
     }
