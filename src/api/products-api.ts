@@ -4,9 +4,6 @@ import { ValidatedProduct } from '../validation/product-validator';
 import { logger as defaultLogger } from '../logger';
 import { logBoundarySample } from '../utils/pipeline-debug';
 
-/** Fixed EUR → DKK conversion rate. */
-const EUR_TO_DKK = 7.47417;
-
 // Module-level logger + database client, configurable per pipeline run.
 let log: Logger = defaultLogger;
 let dbClient: DatabaseClient = defaultDatabaseClient;
@@ -64,9 +61,7 @@ type ProductVariantRow = {
   model_code: string;
   name_en: string;
   barcode: string;
-  price_eur_excl_vat: number;
-  price_eur_incl_vat: number;
-  price_dkk_excl_vat: number;
+  price_dkk_incl_vat: number;
   stock_total: number;
   stock_vaasa: number | null;
   stock_sweden: number | null;
@@ -587,16 +582,6 @@ export async function insertPricesStaging(prices: any[]): Promise<void> {
   try {
     const formattedPrices = prices.map(price => ({
       product_code: price.PRODUCT_CODE,
-      eur_excl_vat: toNullableNumber(price.EUR_EXCL_VAT),
-      eur_incl_vat: toNullableNumber(price.EUR_INCL_VAT),
-      eur_excl_vat_eu: toNullableNumber(price.EUR_EXCL_VAT_EU),
-      eur_incl_vat_eu: toNullableNumber(price.EUR_INCL_VAT_EU),
-      sek_excl_vat: toNullableNumber(price.SEK_EXCL_VAT),
-      sek_incl_vat: toNullableNumber(price.SEK_INCL_VAT),
-      nok_excl_vat: toNullableNumber(price.NOK_EXCL_VAT),
-      nok_incl_vat: toNullableNumber(price.NOK_INCL_VAT),
-      gbp_excl_vat: toNullableNumber(price.GBP_EXCL_VAT),
-      dkk_excl_vat: toNullableNumber(price.DKK_EXCL_VAT),
       dkk_incl_vat: toNullableNumber(price.DKK_INCL_VAT),
       imported_at: new Date().toISOString(),
     }));
@@ -851,8 +836,6 @@ export async function promoteToProduction(
       const modelCode = deriveModelCode(v);
       if (!modelRepresentative.has(modelCode)) modelRepresentative.set(modelCode, v);
 
-      const priceExcl = v.price_eur_excl_vat;
-      const priceIncl = v.price_eur_incl_vat;
       const stockTotal = v.stock_total;
 
       const variantNameEn = typeof v.name_en === 'string' ? v.name_en.trim() : '';
@@ -863,9 +846,6 @@ export async function promoteToProduction(
       // been removed to avoid maintaining two copies of the same logic.
       // The non-null assertions (!) below are safe because isVariantEligible
       // already confirmed these fields are present.
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      const priceDkkExcl = Math.round(priceExcl! * EUR_TO_DKK * 100) / 100;
-
       const imageUrls = Array.isArray(v.image_urls) && v.image_urls.length > 0
         ? v.image_urls
         : [];
@@ -875,9 +855,7 @@ export async function promoteToProduction(
         model_code: modelCode,
         name_en: variantNameEn,
         barcode: v.barcode!,
-        price_eur_excl_vat: priceExcl!,
-        price_eur_incl_vat: priceIncl!,
-        price_dkk_excl_vat: priceDkkExcl,
+        price_dkk_incl_vat: v.price_dkk_incl_vat!,
         stock_total: stockTotal!,
         stock_vaasa: typeof v.stock_vaasa === 'number' ? v.stock_vaasa : null,
         stock_sweden: typeof v.stock_sweden === 'number' ? v.stock_sweden : null,
@@ -1130,9 +1108,7 @@ export type ProductionVariant = {
   model_code: string;
   name_en: string;
   barcode: string;
-  price_eur_excl_vat: number;
-  price_eur_incl_vat: number;
-  price_dkk_excl_vat: number;
+  price_dkk_incl_vat: number;
   stock_total: number;
   stock_vaasa: number | null;
   stock_sweden: number | null;

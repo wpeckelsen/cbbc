@@ -18,9 +18,9 @@ services:
       - .env
     depends_on:
       - postgres
-    # Override DATABASE_URL for local dev
+    # Override DB_URL to point at the local containerized Postgres
     environment:
-      DATABASE_URL: postgresql://cbbc_user:cbbc_pass@postgres:5432/cbbc_db
+      DB_URL: postgresql://cbbc_user:cbbc_pass@postgres:5432/cbbc_db
     # Run cron directly on startup
     command: ["node", "dist/worker.js"]
 

@@ -82,7 +82,7 @@ Parent rows that are "sellable" (have barcode, price, stock, image, name, brand,
 ### 6. Enrich + validate
 
 Each variant row is joined with its price, stock, and image via the lookup maps. `ProductValidator.enrichProduct()` produces a `ValidatedProduct` with:
-- Computed fields: `model_code`, `price_eur_excl_vat`, `stock_total`, `image_url`, `barcode`
+- Computed fields: `model_code`, `price_dkk_incl_vat`, `stock_total`, `image_url`, `barcode`
 - `errors[]`: list of validation failures
 
 ### 7. Model consistency check
@@ -166,7 +166,7 @@ FK safety: variants are only written if their `model_code` exists in the promote
 | `product_variants.product_code` | Variant SKU |
 | `product_variants.name_en` | Variant option value (multi-variant models); default option for single-variant |
 | `product_variants.barcode` | Variant barcode |
-| `product_variants.price_dkk_excl_vat` | Variant price (EUR → DKK at 7.47417, excl. VAT) |
+| `product_variants.price_dkk_incl_vat` | Variant price (supplier `DKK_INCL_VAT`, incl. VAT — no conversion) |
 | `product_variants.stock_total` | Inventory quantity |
 | `product_variants.image_url` | Product/variant media |
 
@@ -194,7 +194,7 @@ Written by the pipeline with capped/filtered supplier data.
 Normalized, promoted data — source of truth for Shopify.
 
 - **`product_models`** — one row per model. PK: `model_code`. Contains model-level name, brand, vendor, categories.
-- **`product_variants`** — one row per sellable SKU. PK: `product_code`. FK: `model_code` → `product_models`. Contains price (EUR + DKK), stock, barcode, image URL.
+- **`product_variants`** — one row per sellable SKU. PK: `product_code`. FK: `model_code` → `product_models`. Contains price (DKK incl. VAT), stock, barcode, image URL.
 
 ### Store sync tables
 

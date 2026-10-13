@@ -61,15 +61,9 @@ export const config = {
     verbose: !isProd,
   },
   database: {
-    // Dev (local): use the public TCP proxy URL for external access.
-    // Prod (Railway): use the internal URL for fast, free connections.
-    url:
-      (isProd
-        ? (process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL)
-        : (process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL)
-      ) ||
-      process.env.POSTGRES_URL ||
-      '',
+    // One DB per environment. Locally use the PUBLIC Railway URL; inside
+    // Railway use the PRIVATE URL (set via the Railway dashboard).
+    url: process.env.DB_URL || '',
   },
   shopify: {
     storeDomain: process.env.SHOPIFY_STORE_DOMAIN || '',

@@ -12,7 +12,7 @@ import { ModelWithVariants, ProductionModel, ProductionVariant } from '../api/pr
  * - metafield           <- cbbc.model_code
  * - variant sku         <- variant.product_code
  * - variant barcode     <- variant.barcode
- * - variant price       <- variant.price_eur_excl_vat (Shopify applies VAT)
+ * - variant price       <- variant.price_dkk_incl_vat (supplier DKK incl. VAT)
  * - variant option      <- variant.name_en (only for multi-variant models)
  * - variant image       <- variant.image_urls[0] (primary image)
  * - product media       <- all distinct variant image_urls (full gallery)
@@ -37,13 +37,10 @@ export function handleForModel(modelCode: string): string {
 }
 
 function priceString(variant: ProductionVariant): string {
-  // Shopify store sells in DKK — use the pre-converted DKK price.
-  const dkk = Number(variant.price_dkk_excl_vat);
+  // Shopify store sells at the supplier's DKK incl. VAT price.
+  const dkk = Number(variant.price_dkk_incl_vat);
   if (!isNaN(dkk) && isFinite(dkk)) return dkk.toFixed(2);
-  // Fallback: live-convert from EUR if the DKK column is missing/null.
-  const eur = Number(variant.price_eur_excl_vat);
-  if (!isNaN(eur) && isFinite(eur)) return (eur * 7.47417).toFixed(2);
-  throw new Error(`Variant ${variant.product_code} has no usable price (dkk=${variant.price_dkk_excl_vat}, eur=${variant.price_eur_excl_vat})`);
+  throw new Error(`Variant ${variant.product_code} has no usable price (dkk_incl=${variant.price_dkk_incl_vat})`);
 }
 
 function distinct<T>(items: T[]): T[] {

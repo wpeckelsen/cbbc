@@ -55,16 +55,6 @@ export async function parseProductsCsv(filePath: string, log: Logger = defaultLo
 
 export interface PriceRecord {
   PRODUCT_CODE: string;
-  EUR_EXCL_VAT?: string;
-  EUR_INCL_VAT?: string;
-  EUR_EXCL_VAT_EU?: string;
-  EUR_INCL_VAT_EU?: string;
-  SEK_EXCL_VAT?: string;
-  SEK_INCL_VAT?: string;
-  NOK_EXCL_VAT?: string;
-  NOK_INCL_VAT?: string;
-  GBP_EXCL_VAT?: string;
-  DKK_EXCL_VAT?: string;
   DKK_INCL_VAT?: string;
   [key: string]: any;
 }

@@ -91,10 +91,11 @@ Set to a small number (e.g. `5`) when testing to keep runs fast and avoid pollut
 
 | Variable | Effect |
 |----------|--------|
-| `DATABASE_URL` | Internal Railway hostname (fast, free bandwidth). Preferred in prod. |
-| `DATABASE_PUBLIC_URL` | Public TCP proxy URL. Preferred in dev (reachable from outside Railway). |
+| `DB_URL` | The single database this environment connects to. |
 
-The code picks the right one based on `ENV`. You can set both; no need to comment/uncomment.
+Each environment (local, staging, production) sets its own `DB_URL`. Locally
+set it to the PUBLIC Railway URL (private URLs are unreachable from outside
+Railway); inside Railway set it to the PRIVATE URL via a reference variable.
 
 ### FTP
 
@@ -134,7 +135,7 @@ Log level is fixed (`debug` dev / `info` prod). Memory (`NODE_OPTIONS`) is set i
 | Model limit | Required (`PIPELINE_MODEL_LIMIT` / `SHOPIFY_PUSH_MODEL_LIMIT`) | Unlimited (ignored) |
 | Brand filter | Required (`BRAND_FILTER_ENABLED`) | Always on |
 | Log level | `debug` | `info` |
-| DB URL | Prefers `DATABASE_PUBLIC_URL` | Prefers `DATABASE_URL` |
+| DB URL | `DB_URL` (set per environment) | `DB_URL` (set per environment) |
 
 ---
 
@@ -144,8 +145,7 @@ Log level is fixed (`debug` dev / `info` prod). Memory (`NODE_OPTIONS`) is set i
 
 ```
 ENV=prod
-DATABASE_URL=           (auto-set by Railway Postgres plugin)
-DATABASE_PUBLIC_URL=    (auto-set by Railway Postgres plugin)
+DB_URL=                 (private — set as reference variable: ${{Postgres.DATABASE_URL}})
 FTP_HOST=updateftp.duell.fi
 FTP_USER=...
 FTP_PASS=...
@@ -160,7 +160,8 @@ SHOPIFY_LOCATION_ID=...
 The pipeline does NOT run migrations automatically. On a fresh DB:
 
 ```bash
-# From your local machine (with DATABASE_PUBLIC_URL in .env pointing to the new DB):
+# From your local machine (with DB_URL in .env pointing to the new DB via its
+# PUBLIC URL):
 npm run db:migrate
 
 # Or via Railway CLI:
@@ -249,7 +250,7 @@ The pipeline runs a **drift check** on boot (compares migration files on disk vs
 
 ### Pricing
 
-Variant prices are converted from EUR to DKK (rate: 7.47417) and pushed **excluding VAT**. Configure your Shopify store so prices do not include tax — Shopify adds VAT at checkout.
+Variant prices are the supplier's `DKK_INCL_VAT` (incl. VAT), pushed as-is with no conversion. Configure your Shopify store so prices **include tax** — otherwise VAT would be charged again on top of an already VAT-inclusive price.
 
 ### Content hashing
 

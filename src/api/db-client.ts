@@ -17,7 +17,7 @@ let sharedPool: Pool | null = null;
 function getPool(): Pool {
   if (!sharedPool) {
     const url = config.database.url;
-    if (!url) throw new Error('Database URL is not set — set DATABASE_PUBLIC_URL (dev) or DATABASE_URL (prod) in .env');
+    if (!url) throw new Error('Database URL is not set — set DB_URL in .env');
     sharedPool = new Pool({ connectionString: url, max: 10 });
   }
   return sharedPool;

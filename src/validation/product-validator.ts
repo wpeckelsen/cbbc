@@ -18,8 +18,7 @@ export interface ValidatedProduct {
   name_sv?: string;
   brand?: string;
   category_codes?: string[];
-  price_eur_excl_vat?: number;
-  price_eur_incl_vat?: number;
+  price_dkk_incl_vat?: number;
   stock_total?: number;
   stock_vaasa?: number;
   stock_sweden?: number;
@@ -93,40 +92,14 @@ export class ProductValidator {
       errors.push({ field: 'PRODUCT_CODE', value: record.PRODUCT_CODE, reason: 'Product code is required' });
     }
 
-    // Required: EUR prices (strict)
-    const exclRaw = record.EUR_EXCL_VAT;
-    const inclRaw = record.EUR_INCL_VAT;
-
-    if (exclRaw === undefined || exclRaw === null || String(exclRaw).trim() === '') {
-      errors.push({ field: 'EUR_EXCL_VAT', value: exclRaw, reason: 'EUR_EXCL_VAT is required' });
+    // Required: DKK incl. VAT (strict) — this is the storefront price.
+    const dkkInclRaw = record.DKK_INCL_VAT;
+    if (dkkInclRaw === undefined || dkkInclRaw === null || String(dkkInclRaw).trim() === '') {
+      errors.push({ field: 'DKK_INCL_VAT', value: dkkInclRaw, reason: 'DKK_INCL_VAT is required' });
     }
-    if (inclRaw === undefined || inclRaw === null || String(inclRaw).trim() === '') {
-      errors.push({ field: 'EUR_INCL_VAT', value: inclRaw, reason: 'EUR_INCL_VAT is required' });
-    }
-
-    const excl = exclRaw !== undefined && exclRaw !== null && String(exclRaw).trim() !== '' ? parseFloat(String(exclRaw)) : NaN;
-    const incl = inclRaw !== undefined && inclRaw !== null && String(inclRaw).trim() !== '' ? parseFloat(String(inclRaw)) : NaN;
-
-    if (!isNaN(excl) && excl < 0) {
-      errors.push({ field: 'EUR_EXCL_VAT', value: exclRaw, reason: 'Price must be a non-negative number' });
-    }
-    if (!isNaN(incl) && incl < 0) {
-      errors.push({ field: 'EUR_INCL_VAT', value: inclRaw, reason: 'Price must be a non-negative number' });
-    }
-    if (!isNaN(excl) && !isNaN(incl) && incl < excl) {
-      errors.push({ field: 'EUR_INCL_VAT', value: inclRaw, reason: 'EUR_INCL_VAT must be greater than or equal to EUR_EXCL_VAT' });
-    }
-
-    // Other price fields (if present) must be non-negative numbers
-    const otherPriceFields = ['EUR_EXCL_VAT_EU', 'EUR_INCL_VAT_EU', 'SEK_EXCL_VAT', 'SEK_INCL_VAT', 'NOK_EXCL_VAT', 'NOK_INCL_VAT', 'GBP_EXCL_VAT', 'DKK_EXCL_VAT', 'DKK_INCL_VAT'];
-    for (const field of otherPriceFields) {
-      const value = record[field];
-      if (value !== undefined && value !== '') {
-        const num = parseFloat(String(value));
-        if (isNaN(num) || num < 0) {
-          errors.push({ field, value, reason: 'Price must be a non-negative number' });
-        }
-      }
+    const dkkIncl = dkkInclRaw !== undefined && dkkInclRaw !== null && String(dkkInclRaw).trim() !== '' ? parseFloat(String(dkkInclRaw)) : NaN;
+    if (!isNaN(dkkIncl) && dkkIncl < 0) {
+      errors.push({ field: 'DKK_INCL_VAT', value: dkkInclRaw, reason: 'Price must be a non-negative number' });
     }
 
     return { isValid: errors.length === 0, errors };
@@ -191,12 +164,11 @@ export class ProductValidator {
 
     // Price is required
     if (!price) {
-      errors.push({ field: 'price_eur', value: null, reason: 'EUR price is required' });
+      errors.push({ field: 'price_dkk', value: null, reason: 'DKK price is required' });
     } else {
       const priceValidation = this.validatePrice(price);
       if (priceValidation.isValid) {
-        validated.price_eur_excl_vat = parseFloat(String(price.EUR_EXCL_VAT));
-        validated.price_eur_incl_vat = parseFloat(String(price.EUR_INCL_VAT));
+        validated.price_dkk_incl_vat = parseFloat(String(price.DKK_INCL_VAT));
       } else {
         errors.push(...priceValidation.errors.map(e => ({ ...e, field: `price.${e.field}` })));
       }

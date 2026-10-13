@@ -39,7 +39,7 @@ export function computeContentHashes(entry: ModelWithVariants): ContentHashes {
       product_code: v.product_code,
       name_en: v.name_en,
       barcode: v.barcode,
-      price: (Number(v.price_dkk_excl_vat) || Number(v.price_eur_excl_vat) * 7.47417).toFixed(2),
+      price: Number(v.price_dkk_incl_vat).toFixed(2),
       image_urls: v.image_urls,
     })),
   };

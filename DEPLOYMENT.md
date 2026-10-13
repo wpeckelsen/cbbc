@@ -19,10 +19,11 @@ the timing, so the service only consumes resources while it is actually running.
 
 ## One-time setup (Railway)
 
-1. **Postgres** — the Railway Postgres plugin provides `DATABASE_URL` (private
-   internal URL) and `DATABASE_PUBLIC_URL` (external TCP proxy URL). Keep
-   `DATABASE_URL` for prod so the worker reaches the DB over the private
-   network (no egress fees).
+1. **Postgres** — the Railway Postgres plugin provides a private internal URL
+   (`DATABASE_URL`) and a public TCP proxy URL (`DATABASE_PUBLIC_URL`). In each
+   environment, set a reference variable so the worker reaches the DB over the
+   private network (no egress fees):
+   `DB_URL` = `${{Postgres.DATABASE_URL}}`
 
 2. **Apply migrations** — before the first run:
    ```bash
@@ -53,7 +54,7 @@ the timing, so the service only consumes resources while it is actually running.
 |---|---|---|
 | `ENV` | yes | `dev` or `prod`. No default — the process refuses to start without it. |
 | `FTP_HOST` / `FTP_USER` / `FTP_PASS` / `FTP_PORT` / `FTP_SECURE` / `FTP_REJECT_UNAUTHORIZED` | yes | Supplier FTP. Never hard-coded. |
-| `DATABASE_URL` / `DATABASE_PUBLIC_URL` | yes | prod prefers `DATABASE_URL` (internal), dev prefers public. |
+| `DB_URL` | yes | One DB per environment. Local = public URL; Railway = private URL. |
 | `SHOPIFY_STORE_DOMAIN` / `SHOPIFY_CLIENT_ID` / `SHOPIFY_SECRET` / `SHOPIFY_ADMIN_ACCESS_TOKEN` / `SHOPIFY_API_VERSION` / `SHOPIFY_PUBLICATION_ID` / `SHOPIFY_LOCATION_ID` | yes | Shopify integration. |
 | `PIPELINE_MODEL_LIMIT` | dev only | Required in dev (`0` = unlimited); ignored in prod. |
 | `SHOPIFY_PUSH_MODEL_LIMIT` | dev only | Required in dev (`0` = unlimited); ignored in prod. |
@@ -76,6 +77,7 @@ cp .env.example .env
 #   PIPELINE_MODEL_LIMIT=5
 #   SHOPIFY_PUSH_MODEL_LIMIT=5
 #   BRAND_FILTER_ENABLED=true
+# set DB_URL to the PUBLIC Railway URL of the environment you want to hit
 npm run db:migrate
 npm run dev     # runs pipeline → Shopify push once, then exits
 ```
