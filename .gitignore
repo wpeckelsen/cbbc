@@ -6,5 +6,5 @@ logs/
 .DS_Store
 cache/
 
-
+AGENTS.md
 temp/
