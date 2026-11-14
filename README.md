@@ -27,7 +27,7 @@ npm run build                # tsc -> dist/
 npm start                    # node dist/worker.js — runs pipeline + Shopify push once, then exits
 ```
 
-On Railway, the service runs `node dist/worker.js` on a schedule (Railway Cron Job) and exits when the run completes. See [PIPELINE_GUIDE.md](./PIPELINE_GUIDE.md) for full deployment and configuration details.
+On Railway, the service runs `node dist/worker.js` on a schedule (Railway Cron Job) and exits when the run completes. See [src/Documentation.md](./src/Documentation.md) for a simple guide to the pipeline, pricing, and brand whitelist.
 
 ## What the pipeline does
 
@@ -42,6 +42,5 @@ On Railway, the service runs `node dist/worker.js` on a schedule (Railway Cron J
 
 | Document | Purpose |
 |----------|---------|
-| [PIPELINE_GUIDE.md](./PIPELINE_GUIDE.md) | How to operate the pipeline: env vars, commands, deployment, external tools |
-| [TECHNICAL_OVERVIEW.md](./TECHNICAL_OVERVIEW.md) | Deep dive: data flow, table schema, filtering/capping logic, Shopify mapping |
+| [src/Documentation.md](./src/Documentation.md) | Start here: pricing adjustment, brand whitelist, and the pipeline in plain language |
 | `.env.example` | All configurable environment variables with comments |

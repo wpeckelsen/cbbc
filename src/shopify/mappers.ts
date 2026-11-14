@@ -12,7 +12,7 @@ import { ModelWithVariants, ProductionModel, ProductionVariant } from '../api/pr
  * - metafield           <- cbbc.model_code
  * - variant sku         <- variant.product_code
  * - variant barcode     <- variant.barcode
- * - variant price       <- variant.price_dkk_incl_vat (supplier DKK incl. VAT)
+ * - variant price       <- variant.price_dkk_incl_vat (adjusted supplier DKK incl. VAT)
  * - variant option      <- variant.name_en (only for multi-variant models)
  * - variant image       <- variant.image_urls[0] (primary image)
  * - product media       <- all distinct variant image_urls (full gallery)
@@ -37,7 +37,7 @@ export function handleForModel(modelCode: string): string {
 }
 
 function priceString(variant: ProductionVariant): string {
-  // Shopify store sells at the supplier's DKK incl. VAT price.
+  // Storefront DKK incl. VAT price, after the optional ingestion-time multiplier.
   const dkk = Number(variant.price_dkk_incl_vat);
   if (!isNaN(dkk) && isFinite(dkk)) return dkk.toFixed(2);
   throw new Error(`Variant ${variant.product_code} has no usable price (dkk_incl=${variant.price_dkk_incl_vat})`);

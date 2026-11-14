@@ -1,4 +1,5 @@
 import { ProductRecord, PriceRecord, StockRecord } from '../parsers/csv-parser';
+import { config } from '../config/env';
 
 export interface ValidationError {
   field: string;
@@ -168,7 +169,11 @@ export class ProductValidator {
     } else {
       const priceValidation = this.validatePrice(price);
       if (priceValidation.isValid) {
-        validated.price_dkk_incl_vat = parseFloat(String(price.DKK_INCL_VAT));
+        // Apply the global adjustment once at ingestion. Production tables,
+        // content hashes, and Shopify all use this resulting value.
+        // Round to currency precision to avoid floating-point noise.
+        const supplierPrice = parseFloat(String(price.DKK_INCL_VAT));
+        validated.price_dkk_incl_vat = Math.round(supplierPrice * config.priceMultiplier * 100) / 100;
       } else {
         errors.push(...priceValidation.errors.map(e => ({ ...e, field: `price.${e.field}` })));
       }

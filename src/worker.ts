@@ -51,6 +51,9 @@ async function runPipeline(): Promise<void> {
   const log = run.log;
 
   log.info('Starting FTP product pipeline');
+  if (config.priceMultiplier !== 1) {
+    log.info(`Price multiplier enabled: ${config.priceMultiplier} (applied to supplier DKK incl. VAT prices)`);
+  }
 
   // Wire the run logger into shared modules
   const db = new DatabaseClient(log);

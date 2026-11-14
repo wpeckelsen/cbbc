@@ -11,6 +11,16 @@ function parseBooleanEnv(value: string | undefined, defaultValue: boolean = fals
   return defaultValue;
 }
 
+/** Optional global price adjustment. Defaults to 1 (supplier price unchanged). */
+function parsePriceMultiplier(value: string | undefined): number {
+  if (value === undefined || value.trim() === '') return 1;
+  const multiplier = Number(value.trim());
+  if (!Number.isFinite(multiplier) || multiplier <= 0) {
+    throw new Error(`PRICE_MULTIPLIER must be a positive number (got '${value}'). Use 0.95 for a 5% reduction.`);
+  }
+  return multiplier;
+}
+
 // ENV is required and must be exactly 'dev' or 'prod' — no silent default.
 const rawEnv = (process.env.ENV || '').trim().toLowerCase();
 if (rawEnv !== 'dev' && rawEnv !== 'prod') {
@@ -49,6 +59,8 @@ export const config = {
   /** 'dev' or 'prod' — controls caps, caching, and safety rails. */
   env: isProd ? 'prod' as const : 'dev' as const,
   isProd,
+  /** Supplier DKK incl. VAT prices are multiplied by this during enrichment. */
+  priceMultiplier: parsePriceMultiplier(process.env.PRICE_MULTIPLIER),
   ftp: {
     host: process.env.FTP_HOST || 'ftp.example.com',
     port: parseInt(process.env.FTP_PORT || '21'),
